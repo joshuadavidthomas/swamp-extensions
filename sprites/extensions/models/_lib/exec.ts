@@ -24,7 +24,8 @@ import { Readable } from "node:stream";
 
 /** A terminal dimension that fits the kernel's unsigned 16-bit winsize field. */
 export const TerminalDimension = z.number().int().min(1).max(65_535);
-const CommandArgs = z.object({
+/** Shared command arguments for HTTP and WebSocket execution. */
+export const CommandArgs = z.object({
   cmd: z.array(z.string()).min(1).describe(
     "Program and argv, encoded as repeated cmd parameters.",
   ),

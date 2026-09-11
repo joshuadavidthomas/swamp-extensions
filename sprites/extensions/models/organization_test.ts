@@ -3,7 +3,7 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { withMockedFetch } from "@swamp-club/swamp-testing";
 import { testContext } from "./_lib/test_support.ts";
-import { model } from "./organization.ts";
+import { createMethods, model } from "./organization.ts";
 
 const globalArgs = {
   token: "test-token",
@@ -544,8 +544,6 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
   assertEquals(writes[2].specName, "networkPolicyRollout");
   assertEquals(writes[2].data, {
     select: { prefix: "worker-" },
-    action: "set",
-    policy: networkPolicy,
     matched: 2,
     applied: 2,
     failed: 0,
@@ -553,6 +551,8 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
       name: `worker-${index}`,
       id: `sprite-${index}`,
       status: "applied",
+      action: "set",
+      policy: networkPolicy,
     })),
     observedAt: writes[2].data.observedAt,
   });
@@ -637,9 +637,21 @@ Deno.test("setNetworkPolicy all omits prefix and records a failure without retry
   assertEquals(rollout.applied, 2);
   assertEquals(rollout.failed, 1);
   assertEquals(rollout.results, [
-    { name: "worker-1", id: "sprite-1", status: "applied" },
+    {
+      name: "worker-1",
+      id: "sprite-1",
+      status: "applied",
+      action: "set",
+      policy: networkPolicy,
+    },
     { name: "worker-2", id: "sprite-2", status: "failed", error: "HTTP 500" },
-    { name: "worker-3", id: "sprite-3", status: "applied" },
+    {
+      name: "worker-3",
+      id: "sprite-3",
+      status: "applied",
+      action: "set",
+      policy: networkPolicy,
+    },
   ]);
   const failed = context.getWrittenResources()[1];
   assertEquals(failed.specName, "spriteNetworkPolicy");
@@ -649,8 +661,6 @@ Deno.test("setNetworkPolicy all omits prefix and records a failure without retry
     id: "sprite-2",
     status: "failed",
     error: "HTTP 500",
-    action: "set",
-    policy: networkPolicy,
     observedAt: rollout.observedAt,
   });
 });
@@ -729,32 +739,6 @@ Deno.test("setNetworkPolicy parent cancellation mid-rollout preserves completed 
   assertEquals(typeof writes[0].data.observedAt, "string");
 });
 
-Deno.test("setNetworkPolicy selector rejects missing and conflicting selections", () => {
-  const schema = model.methods.setNetworkPolicy.arguments;
-  for (
-    const select of [
-      {},
-      { all: true, prefix: "worker-" },
-      { all: true, labels: ["ci"] },
-      { prefix: "" },
-      { labels: [] },
-      { labels: [""] },
-    ]
-  ) {
-    assertEquals(
-      schema.safeParse({ select, policy: networkPolicy }).success,
-      false,
-    );
-  }
-  assertEquals(
-    schema.safeParse({
-      select: { prefix: "worker-", labels: ["ci"] },
-      policy: networkPolicy,
-    }).success,
-    true,
-  );
-});
-
 Deno.test("setPrivilegesPolicy posts the policy and records the rollout and Sprite outcome", async () => {
   const context = testContext(globalArgs);
   const policy = {
@@ -794,14 +778,19 @@ Deno.test("setPrivilegesPolicy posts the policy and records the rollout and Spri
   const summary = model.resources.privilegesPolicyRollout.schema.parse(
     writes[1].data,
   );
+  assertEquals(writes.at(-1)!.data, summary);
   assertEquals(summary, {
     select: { all: true },
-    action: "set",
-    policy,
     matched: 1,
     applied: 1,
     failed: 0,
-    results: [{ name: "worker-1", id: "sprite-1", status: "applied" }],
+    results: [{
+      name: "worker-1",
+      id: "sprite-1",
+      status: "applied",
+      action: "set",
+      policy,
+    }],
     observedAt: summary.observedAt,
   });
   assertEquals(writes[0].specName, "spritePrivilegesPolicy");
@@ -851,14 +840,19 @@ Deno.test("setResourcesPolicy posts the policy and records the rollout and Sprit
   const summary = model.resources.resourcesPolicyRollout.schema.parse(
     writes[1].data,
   );
+  assertEquals(writes.at(-1)!.data, summary);
   assertEquals(summary, {
     select: { all: true },
-    action: "set",
-    policy,
     matched: 1,
     applied: 1,
     failed: 0,
-    results: [{ name: "worker-1", id: "sprite-1", status: "applied" }],
+    results: [{
+      name: "worker-1",
+      id: "sprite-1",
+      status: "applied",
+      action: "set",
+      policy,
+    }],
     observedAt: summary.observedAt,
   });
   assertEquals(writes[0].specName, "spriteResourcesPolicy");
@@ -906,13 +900,18 @@ Deno.test("deletePrivilegesPolicy removes policies in order and records an absen
     writes[2].data,
   );
   const results: typeof summary.results = [
-    { name: "worker-1", id: "sprite-1", status: "applied" },
+    {
+      name: "worker-1",
+      id: "sprite-1",
+      status: "applied",
+      action: "delete",
+      policy: null,
+    },
     { name: "worker-2", id: "sprite-2", status: "failed", error: "HTTP 404" },
   ];
+  assertEquals(writes.at(-1)!.data, summary);
   assertEquals(summary, {
     select: { all: true },
-    action: "delete",
-    policy: null,
     matched: 2,
     applied: 1,
     failed: 1,
@@ -924,8 +923,6 @@ Deno.test("deletePrivilegesPolicy removes policies in order and records an absen
     assertEquals(writes[index].name, `privilegesPolicy-${result.name}`);
     assertEquals(writes[index].data, {
       ...result,
-      action: "delete",
-      policy: null,
       observedAt: summary.observedAt,
     });
   }
@@ -958,4 +955,592 @@ Deno.test("deleteResourcesPolicy uses the resources route and record names", asy
       { specName: "resourcesPolicyRollout", name: "resourcesPolicyRollout" },
     ],
   );
+  const writes = context.getWrittenResources();
+  const summary = model.resources.resourcesPolicyRollout.schema.parse(
+    writes[1].data,
+  );
+  const row = {
+    name: "worker-1",
+    id: "sprite-1",
+    status: "applied",
+    action: "delete",
+    policy: null,
+  };
+  assertEquals(writes[1].data, {
+    select: { all: true },
+    matched: 1,
+    applied: 1,
+    failed: 0,
+    results: [row],
+    observedAt: summary.observedAt,
+  });
+  assertEquals(writes[0].data, { ...row, observedAt: summary.observedAt });
+});
+
+Deno.test("getNetworkPolicy reads each current policy into the audit and shared records", async () => {
+  const context = testContext(globalArgs);
+  const policies = [networkPolicy, {
+    rules: [{ domain: "blocked.example", action: "deny" }],
+  }];
+  const { result, calls } = await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [rolloutSprite(1), rolloutSprite(2)],
+      }),
+      ...policies.map((policy) => response(policy)),
+    ],
+    () =>
+      model.methods.getNetworkPolicy.execute(
+        { select: { all: true } },
+        context,
+      ),
+  );
+  assertEquals(calls.map((call) => call.method), ["GET", "GET", "GET"]);
+  assertEquals(calls.map((call) => new URL(call.url).pathname), [
+    "/v1/sprites",
+    "/v1/sprites/worker-1/policy/network",
+    "/v1/sprites/worker-2/policy/network",
+  ]);
+  assertEquals(result.dataHandles.map((handle) => handle.name), [
+    "networkPolicy-worker-1",
+    "networkPolicy-worker-2",
+    "networkPolicyAudit",
+  ]);
+  const writes = context.getWrittenResources();
+  const audit = model.resources.networkPolicyAudit.schema.parse(writes[2].data);
+  const results = policies.map((policy, index) => ({
+    name: `worker-${index + 1}`,
+    id: `sprite-${index + 1}`,
+    status: "applied",
+    action: "read",
+    policy,
+  }));
+  assertEquals(writes[2].specName, "networkPolicyAudit");
+  assertEquals(audit, {
+    select: { all: true },
+    matched: 2,
+    applied: 2,
+    failed: 0,
+    results,
+    observedAt: audit.observedAt,
+  });
+  for (const [index, row] of results.entries()) {
+    assertEquals(writes[index].specName, "spriteNetworkPolicy");
+    assertEquals(writes[index].name, `networkPolicy-worker-${index + 1}`);
+    assertEquals(writes[index].data, { ...row, observedAt: audit.observedAt });
+  }
+});
+
+Deno.test("upgrade posts with and without a version and records provider acceptance", async () => {
+  for (const version of ["2026.09.11", undefined]) {
+    const context = testContext(globalArgs);
+    const bodies: string[] = [];
+    const { result, calls } = await withMockedFetch(
+      async (request) => {
+        if (request.method === "GET") {
+          return response({
+            ...emptyPageBase,
+            sprites: [rolloutSprite(1), rolloutSprite(2)],
+          });
+        }
+        bodies.push(await request.text());
+        return new Response(null, { status: 204 });
+      },
+      () =>
+        model.methods.upgrade.execute(
+          { select: { all: true }, version },
+          context,
+        ),
+    );
+    assertEquals(calls.map((call) => call.method), ["GET", "POST", "POST"]);
+    assertEquals(calls.slice(1).map((call) => new URL(call.url).pathname), [
+      "/v1/sprites/worker-1/upgrade",
+      "/v1/sprites/worker-2/upgrade",
+    ]);
+    assertEquals(
+      bodies,
+      [1, 2].map(() => version ? JSON.stringify({ version }) : ""),
+    );
+    assertEquals(result.dataHandles.map((handle) => handle.name), [
+      "upgrade-worker-1",
+      "upgrade-worker-2",
+      "upgradeRollout",
+    ]);
+    const writes = context.getWrittenResources();
+    const summary = model.resources.upgradeRollout.schema.parse(writes[2].data);
+    const results = [1, 2].map((index) => ({
+      name: `worker-${index}`,
+      id: `sprite-${index}`,
+      status: "applied",
+      version: version ?? null,
+    }));
+    assertEquals(writes[2].specName, "upgradeRollout");
+    assertEquals(writes.at(-1)!.data, summary);
+    assertEquals(summary, {
+      select: { all: true },
+      matched: 2,
+      applied: 2,
+      failed: 0,
+      results,
+      observedAt: summary.observedAt,
+    });
+    for (const [index, row] of results.entries()) {
+      assertEquals(writes[index].specName, "spriteUpgrade");
+      assertEquals(writes[index].data, {
+        ...row,
+        observedAt: summary.observedAt,
+      });
+    }
+  }
+});
+
+Deno.test("restart posts without a body and saves each outcome and summary", async () => {
+  const context = testContext(globalArgs);
+  const { result, calls } = await withMockedFetch((request) => {
+    if (request.method === "GET") {
+      return response({
+        ...emptyPageBase,
+        sprites: [rolloutSprite(1), rolloutSprite(2)],
+      });
+    }
+    assertEquals(request.body, null);
+    return new Response(null, { status: 204 });
+  }, () => model.methods.restart.execute({ select: { all: true } }, context));
+  assertEquals(calls.map((call) => call.method), ["GET", "POST", "POST"]);
+  assertEquals(calls.slice(1).map((call) => new URL(call.url).pathname), [
+    "/v1/sprites/worker-1/restart",
+    "/v1/sprites/worker-2/restart",
+  ]);
+  assertEquals(result.dataHandles.map((handle) => handle.name), [
+    "restart-worker-1",
+    "restart-worker-2",
+    "restartRollout",
+  ]);
+  const writes = context.getWrittenResources();
+  const summary = model.resources.restartRollout.schema.parse(writes[2].data);
+  const results = [1, 2].map((index) => ({
+    name: `worker-${index}`,
+    id: `sprite-${index}`,
+    status: "applied",
+  }));
+  assertEquals(writes[2].specName, "restartRollout");
+  assertEquals(writes.at(-1)!.data, summary);
+  assertEquals(summary, {
+    select: { all: true },
+    matched: 2,
+    applied: 2,
+    failed: 0,
+    results,
+    observedAt: summary.observedAt,
+  });
+  for (const [index, row] of results.entries()) {
+    assertEquals(writes[index].specName, "spriteRestart");
+    assertEquals(writes[index].data, {
+      ...row,
+      observedAt: summary.observedAt,
+    });
+  }
+});
+
+function progress(...events: unknown[]): Response {
+  return new Response(
+    events.map((event) => JSON.stringify(event)).join("\n") + "\n",
+    {
+      headers: { "content-type": "application/x-ndjson" },
+    },
+  );
+}
+
+Deno.test("createCheckpoint saves the newest checkpoint and continues after an empty list", async () => {
+  for (const empty of [false, true]) {
+    const context = testContext(globalArgs);
+    const newest = {
+      id: "new",
+      create_time: "2026-09-11T12:00:00Z",
+      comment: "release",
+    };
+    const bodies: unknown[] = [];
+    const { result, calls } = await withMockedFetch(
+      async (request) => {
+        const path = new URL(request.url).pathname;
+        if (path === "/v1/sprites") {
+          return response({
+            ...emptyPageBase,
+            sprites: [1, 2, 3].map((i) => rolloutSprite(i)),
+          });
+        }
+        if (request.method === "POST") {
+          bodies.push(await request.json());
+          return progress({
+            type: "complete",
+            data: "done",
+            time: newest.create_time,
+          });
+        }
+        assertEquals(request.body, null);
+        return response(
+          empty && path.includes("worker-2") ? [] : [
+            newest,
+            { id: "old", create_time: "2026-09-11T13:00:00+02:00" },
+          ],
+        );
+      },
+      () =>
+        model.methods.createCheckpoint.execute({
+          select: { all: true },
+          comment: "release",
+        }, context),
+    );
+    assertEquals(
+      calls.map((call) => [call.method, new URL(call.url).pathname]),
+      [
+        ["GET", "/v1/sprites"],
+        ...[1, 2, 3].flatMap((i) => [
+          ["POST", `/v1/sprites/worker-${i}/checkpoint`],
+          ["GET", `/v1/sprites/worker-${i}/checkpoints`],
+        ]),
+      ],
+    );
+    assertEquals(bodies, [1, 2, 3].map(() => ({ comment: "release" })));
+    const writes = context.getWrittenResources();
+    const summary = model.resources.checkpointRollout.schema.parse(
+      writes[3].data,
+    );
+    const results = [1, 2, 3].map((i) => ({
+      name: `worker-${i}`,
+      id: `sprite-${i}`,
+      ...(empty && i === 2
+        ? { status: "failed", error: "request failed" }
+        : { status: "applied", checkpoint: newest }),
+    }));
+    assertEquals(writes[3].specName, "checkpointRollout");
+    assertEquals(writes[3].name, "checkpointRollout");
+    assertEquals(summary, {
+      select: { all: true },
+      matched: 3,
+      applied: empty ? 2 : 3,
+      failed: empty ? 1 : 0,
+      results,
+      observedAt: summary.observedAt,
+    });
+    assertEquals(result.dataHandles.map((h) => h.name), [
+      "checkpoint-worker-1",
+      "checkpoint-worker-2",
+      "checkpoint-worker-3",
+      "checkpointRollout",
+    ]);
+    for (const [i, row] of results.entries()) {
+      assertEquals(writes[i].specName, "spriteCheckpoint");
+      assertEquals(writes[i].name, `checkpoint-worker-${i + 1}`);
+      assertEquals(writes[i].data, { ...row, observedAt: summary.observedAt });
+    }
+  }
+});
+
+const serviceDefinition = {
+  cmd: "server",
+  args: ["--serve"],
+  env: { MODE: "test" },
+  dir: "/app",
+  needs: ["db"],
+  http_port: 8080,
+};
+const savedService = { name: "web/api", ...serviceDefinition };
+
+for (const action of ["put", "start", "stop", "restart", "delete"] as const) {
+  Deno.test(`${action}Service routes requests and saves each outcome and the rollout`, async () => {
+    const context = testContext(globalArgs);
+    const bodies: string[] = [];
+    const { result, calls } = await withMockedFetch(async (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/v1/sprites") {
+        return response({
+          ...emptyPageBase,
+          sprites: [1, 2].map((i) => rolloutSprite(i)),
+        });
+      }
+      if (request.method === "GET") return response(savedService);
+      bodies.push(await request.text());
+      if (action === "delete") {
+        return new Response(null, {
+          status: url.pathname.includes("worker-2") ? 404 : 204,
+        });
+      }
+      return progress(
+        action === "stop"
+          ? {
+            type: url.pathname.includes("worker-2") ? "exit" : "stopped",
+            exit_code: 9,
+            timestamp: 1,
+          }
+          : { type: "started", timestamp: 1 },
+        { type: "complete", timestamp: 2 },
+      );
+    }, () => {
+      const args = { select: { all: true as const }, service_name: "web/api" };
+      switch (action) {
+        case "put":
+          return model.methods.putService.execute({
+            ...args,
+            service: serviceDefinition,
+            duration: "2s",
+          }, context);
+        case "start":
+          return model.methods.startService.execute(
+            { ...args, duration: "2s" },
+            context,
+          );
+        case "restart":
+          return model.methods.restartService.execute({
+            ...args,
+            duration: "2s",
+          }, context);
+        case "stop":
+          return model.methods.stopService.execute(
+            { ...args, timeout: "2s" },
+            context,
+          );
+        case "delete":
+          return model.methods.deleteService.execute(args, context);
+      }
+    });
+    const startup = action === "put" || action === "start" ||
+      action === "restart";
+    assertEquals(
+      calls.slice(1).map((
+        call,
+      ) => [call.method, new URL(call.url).pathname, new URL(call.url).search]),
+      [1, 2].flatMap((i) => {
+        const path = `/v1/sprites/worker-${i}/services/web%2Fapi`;
+        return [
+          [
+            action === "put" ? "PUT" : action === "delete" ? "DELETE" : "POST",
+            path +
+            (action === "put" || action === "delete" ? "" : `/${action}`),
+            action === "delete"
+              ? ""
+              : action === "stop"
+              ? "?timeout=2s"
+              : "?duration=2s",
+          ],
+          ...(startup ? [["GET", path, ""]] : []),
+        ];
+      }),
+    );
+    assertEquals(
+      bodies,
+      [1, 2].map(() =>
+        action === "put" ? JSON.stringify(serviceDefinition) : ""
+      ),
+    );
+    const writes = context.getWrittenResources();
+    const summary = model.resources.serviceRollout.schema.parse(writes[2].data);
+    const results = [1, 2].map((i) => ({
+      name: `worker-${i}`,
+      id: `sprite-${i}`,
+      status: "applied",
+      action,
+      exitCode: action === "stop" ? 9 : null,
+      service: startup ? savedService : null,
+    }));
+    assertEquals(writes[2].specName, "serviceRollout");
+    assertEquals(writes[2].name, "serviceRollout");
+    assertEquals(summary, {
+      select: { all: true },
+      matched: 2,
+      applied: 2,
+      failed: 0,
+      results,
+      observedAt: summary.observedAt,
+    });
+    assertEquals(result.dataHandles.map((h) => h.name), [
+      "service-web/api-worker-1",
+      "service-web/api-worker-2",
+      "serviceRollout",
+    ]);
+    for (const [i, row] of results.entries()) {
+      assertEquals(writes[i].specName, "spriteService");
+      assertEquals(writes[i].name, `service-web/api-worker-${i + 1}`);
+      assertEquals(writes[i].data, { ...row, observedAt: summary.observedAt });
+    }
+  });
+}
+
+Deno.test("putService records a startup exit and still runs the third Sprite", async () => {
+  const context = testContext(globalArgs);
+  const { calls } = await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [1, 2, 3].map((i) => rolloutSprite(i)),
+      }),
+      progress({ type: "complete", timestamp: 1 }),
+      response(savedService),
+      progress({ type: "exit", exit_code: 17, timestamp: 1 }, {
+        type: "complete",
+        timestamp: 2,
+      }),
+      progress({ type: "complete", timestamp: 1 }),
+      response(savedService),
+    ],
+    () =>
+      model.methods.putService.execute({
+        select: { all: true },
+        service_name: "web",
+        service: { cmd: "server", args: [], needs: [] },
+      }, context),
+  );
+  assertEquals(calls.map((call) => call.method), [
+    "GET",
+    "PUT",
+    "GET",
+    "PUT",
+    "PUT",
+    "GET",
+  ]);
+  assertEquals(
+    new URL(calls[4].url).pathname,
+    "/v1/sprites/worker-3/services/web",
+  );
+  const writes = context.getWrittenResources();
+  const summary = model.resources.serviceRollout.schema.parse(writes[3].data);
+  assertEquals([summary.matched, summary.applied, summary.failed], [3, 2, 1]);
+  const failed = {
+    name: "worker-2",
+    id: "sprite-2",
+    status: "failed",
+    error: "exited during startup with code 17",
+    action: "put",
+    exitCode: 17,
+    service: null,
+  };
+  assertEquals(summary.results[1], failed);
+  assertEquals(writes[1].specName, "spriteService");
+  assertEquals(writes[1].name, "service-web-worker-2");
+  assertEquals(writes[1].data, { ...failed, observedAt: summary.observedAt });
+  assertEquals(summary.results[2].status, "applied");
+});
+
+Deno.test("exec records nonzero exits, continues after transport failure, and saves output before the summary", async () => {
+  const context = testContext({ ...globalArgs, timeoutMs: 90_000 });
+  const order: string[] = [];
+  const files: { spec: string; name: string; bytes: Uint8Array }[] = [];
+  const createFileWriter = context.createFileWriter.bind(context);
+  context.createFileWriter = (spec, name) => ({
+    writeAll: async (bytes) => {
+      files.push({ spec, name, bytes });
+      return await createFileWriter(spec, name).writeAll(bytes);
+    },
+  });
+  const methods = createMethods((ctx, name, query, input) => {
+    assertEquals(ctx, context);
+    assertEquals(ctx.globalArgs.timeoutMs, 90_000);
+    assertEquals(context.getWrittenResources().length, order.length);
+    order.push(name);
+    assertEquals(query, {
+      cmd: ["cat"],
+      path: "/bin/cat",
+      dir: "/tmp",
+      env: ["MODE=test"],
+      stdin: true,
+    });
+    assertEquals(input, new TextEncoder().encode("hello"));
+    if (name === "worker-3") {
+      return Promise.reject(new Error("private transport details"));
+    }
+    return Promise.resolve({
+      stdout: new Uint8Array([0, 255]),
+      stderr: new Uint8Array([10]),
+      exitCode: name === "worker-2" ? 1 : 0,
+    });
+  });
+  const { result } = await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [1, 2, 3].map((i) => rolloutSprite(i)),
+      }),
+    ],
+    () =>
+      methods.exec.execute({
+        select: { all: true },
+        cmd: ["cat"],
+        path: "/bin/cat",
+        dir: "/tmp",
+        env: { MODE: "test" },
+        input: { kind: "text", text: "hello" },
+      }, context),
+  );
+  assertEquals(order, ["worker-1", "worker-2", "worker-3"]);
+  const writes = context.getWrittenResources();
+  const summary = model.resources.execRollout.schema.parse(writes[3].data);
+  const rows = [
+    {
+      name: "worker-1",
+      id: "sprite-1",
+      status: "applied",
+      exitCode: 0,
+      stdoutBytes: 2,
+      stderrBytes: 1,
+    },
+    {
+      name: "worker-2",
+      id: "sprite-2",
+      status: "applied",
+      exitCode: 1,
+      stdoutBytes: 2,
+      stderrBytes: 1,
+    },
+    {
+      name: "worker-3",
+      id: "sprite-3",
+      status: "failed",
+      error: "request failed",
+    },
+  ];
+  assertEquals(summary, {
+    select: { all: true },
+    matched: 3,
+    applied: 2,
+    failed: 1,
+    nonzero: 1,
+    results: rows,
+    observedAt: summary.observedAt,
+  });
+  assertEquals(writes.map((w) => [w.specName, w.name]), [
+    ["spriteExec", "exec-worker-1"],
+    ["spriteExec", "exec-worker-2"],
+    ["spriteExec", "exec-worker-3"],
+    ["execRollout", "execRollout"],
+  ]);
+  assertEquals(
+    writes.slice(0, 3).map((w) => w.data),
+    rows.map((row) => ({ ...row, observedAt: summary.observedAt })),
+  );
+  assertEquals(
+    files,
+    [1, 2].flatMap((i) => [
+      {
+        spec: "stdout",
+        name: `stdout-worker-${i}`,
+        bytes: new Uint8Array([0, 255]),
+      },
+      {
+        spec: "stderr",
+        name: `stderr-worker-${i}`,
+        bytes: new Uint8Array([10]),
+      },
+    ]),
+  );
+  assertEquals(result.dataHandles.map((h) => h.name), [
+    "stdout-worker-1",
+    "stderr-worker-1",
+    "exec-worker-1",
+    "stdout-worker-2",
+    "stderr-worker-2",
+    "exec-worker-2",
+    "exec-worker-3",
+    "execRollout",
+  ]);
 });

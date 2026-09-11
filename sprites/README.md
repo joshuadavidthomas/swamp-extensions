@@ -104,13 +104,16 @@ Reference stored results in model definitions with CEL, for example
   snapshots do not renew holds; refresh or release tasks explicitly.
 - Connector policy updates replace the whole policy. Provisioning alone does not
   grant Sprite access; an empty policy denies access.
-- Organization `setNetworkPolicy`, `setPrivilegesPolicy`, `setResourcesPolicy`,
-  `deletePrivilegesPolicy`, and `deleteResourcesPolicy` match Sprites by prefix
-  or labels at call time and set or remove the policy one Sprite at a time. They
-  record failures per Sprite instead of stopping and do not check any Sprite
-  instance's saved identity. Each per-Sprite record `<kind>Policy-<sprite>`
-  holds that Sprite's latest set or removal by the organization, so its result
-  can be read directly and keeps its own history.
+- Organization fan-outs match Sprites by prefix or labels at call time, act one
+  Sprite at a time, record failures per Sprite and continue, and check no Sprite
+  instance's saved identity. They save each Sprite's outcome as its own record
+  named `<operation>-<sprite>` (`setNetworkPolicy`, `setPrivilegesPolicy`,
+  `setResourcesPolicy`, `deletePrivilegesPolicy`, `deleteResourcesPolicy`,
+  `getNetworkPolicy`, `getPrivilegesPolicy`, `getResourcesPolicy`, `upgrade`,
+  `restart`, `createCheckpoint`, `putService`, `startService`, `stopService`,
+  `restartService`, `deleteService`, `exec`). Fleet `exec` gives each Sprite the
+  organization instance’s `timeoutMs`, which defaults to 30 seconds, so raise it
+  for slow commands.
 
 ## Development
 
