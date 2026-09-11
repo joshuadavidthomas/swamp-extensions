@@ -15,12 +15,12 @@ const NetworkRule = z.object({
   },
 );
 export const NetworkPolicy = z.object({ rules: z.array(NetworkRule) });
-const PrivilegesPolicy = z.object({
+export const PrivilegesPolicy = z.object({
   profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
   devices: z.array(z.string()).optional(),
   noNewPrivileges: z.boolean().optional(),
 });
-const ResourcesPolicy = z.object({
+export const ResourcesPolicy = z.object({
   memory: z.object({
     limit_mb: z.number().positive(),
     autoscale: z.boolean().optional(),

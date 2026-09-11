@@ -544,6 +544,7 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
   assertEquals(writes[2].specName, "networkPolicyRollout");
   assertEquals(writes[2].data, {
     select: { prefix: "worker-" },
+    action: "set",
     policy: networkPolicy,
     matched: 2,
     applied: 2,
@@ -563,6 +564,7 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
       name: `worker-${index}`,
       id: `sprite-${index}`,
       status: "applied",
+      action: "set",
       policy: networkPolicy,
       observedAt: writes[2].data.observedAt,
     });
@@ -647,6 +649,7 @@ Deno.test("setNetworkPolicy all omits prefix and records a failure without retry
     id: "sprite-2",
     status: "failed",
     error: "HTTP 500",
+    action: "set",
     policy: networkPolicy,
     observedAt: rollout.observedAt,
   });
@@ -719,6 +722,7 @@ Deno.test("setNetworkPolicy parent cancellation mid-rollout preserves completed 
     name: "worker-1",
     id: "sprite-1",
     status: "applied",
+    action: "set",
     policy: networkPolicy,
     observedAt: writes[0].data.observedAt,
   });
@@ -748,5 +752,210 @@ Deno.test("setNetworkPolicy selector rejects missing and conflicting selections"
       policy: networkPolicy,
     }).success,
     true,
+  );
+});
+
+Deno.test("setPrivilegesPolicy posts the policy and records the rollout and Sprite outcome", async () => {
+  const context = testContext(globalArgs);
+  const policy = {
+    profile: "minimal" as const,
+    devices: ["/dev/null"],
+    noNewPrivileges: true,
+  };
+  const bodies: unknown[] = [];
+  const { result, calls } = await withMockedFetch(
+    async (request) => {
+      if (request.method === "POST") {
+        bodies.push(await request.json());
+        return new Response(null, { status: 204 });
+      }
+      return response({ ...emptyPageBase, sprites: [rolloutSprite(1)] });
+    },
+    () =>
+      model.methods.setPrivilegesPolicy.execute({
+        select: { all: true },
+        policy,
+      }, context),
+  );
+  assertEquals(calls.map((call) => call.method), ["GET", "POST"]);
+  assertEquals(
+    new URL(calls[1].url).pathname,
+    "/v1/sprites/worker-1/policy/privileges",
+  );
+  assertEquals(bodies, [policy]);
+  assertEquals(result.dataHandles.map((handle) => handle.name), [
+    "privilegesPolicy-worker-1",
+    "privilegesPolicyRollout",
+  ]);
+  const writes = context.getWrittenResources();
+  assertEquals(writes.length, 2);
+  assertEquals(writes[1].specName, "privilegesPolicyRollout");
+  assertEquals(writes[1].name, "privilegesPolicyRollout");
+  const summary = model.resources.privilegesPolicyRollout.schema.parse(
+    writes[1].data,
+  );
+  assertEquals(summary, {
+    select: { all: true },
+    action: "set",
+    policy,
+    matched: 1,
+    applied: 1,
+    failed: 0,
+    results: [{ name: "worker-1", id: "sprite-1", status: "applied" }],
+    observedAt: summary.observedAt,
+  });
+  assertEquals(writes[0].specName, "spritePrivilegesPolicy");
+  assertEquals(writes[0].name, "privilegesPolicy-worker-1");
+  assertEquals(writes[0].data, {
+    name: "worker-1",
+    id: "sprite-1",
+    status: "applied",
+    action: "set",
+    policy,
+    observedAt: summary.observedAt,
+  });
+});
+
+Deno.test("setResourcesPolicy posts the policy and records the rollout and Sprite outcome", async () => {
+  const context = testContext(globalArgs);
+  const policy = { memory: { limit_mb: 1024, autoscale: false } };
+  const bodies: unknown[] = [];
+  const { result, calls } = await withMockedFetch(
+    async (request) => {
+      if (request.method === "POST") {
+        bodies.push(await request.json());
+        return new Response(null, { status: 204 });
+      }
+      return response({ ...emptyPageBase, sprites: [rolloutSprite(1)] });
+    },
+    () =>
+      model.methods.setResourcesPolicy.execute({
+        select: { all: true },
+        policy,
+      }, context),
+  );
+  assertEquals(calls.map((call) => call.method), ["GET", "POST"]);
+  assertEquals(
+    new URL(calls[1].url).pathname,
+    "/v1/sprites/worker-1/policy/resources",
+  );
+  assertEquals(bodies, [policy]);
+  assertEquals(result.dataHandles.map((handle) => handle.name), [
+    "resourcesPolicy-worker-1",
+    "resourcesPolicyRollout",
+  ]);
+  const writes = context.getWrittenResources();
+  assertEquals(writes.length, 2);
+  assertEquals(writes[1].specName, "resourcesPolicyRollout");
+  assertEquals(writes[1].name, "resourcesPolicyRollout");
+  const summary = model.resources.resourcesPolicyRollout.schema.parse(
+    writes[1].data,
+  );
+  assertEquals(summary, {
+    select: { all: true },
+    action: "set",
+    policy,
+    matched: 1,
+    applied: 1,
+    failed: 0,
+    results: [{ name: "worker-1", id: "sprite-1", status: "applied" }],
+    observedAt: summary.observedAt,
+  });
+  assertEquals(writes[0].specName, "spriteResourcesPolicy");
+  assertEquals(writes[0].name, "resourcesPolicy-worker-1");
+  assertEquals(writes[0].data, {
+    name: "worker-1",
+    id: "sprite-1",
+    status: "applied",
+    action: "set",
+    policy,
+    observedAt: summary.observedAt,
+  });
+});
+
+Deno.test("deletePrivilegesPolicy removes policies in order and records an absent policy as a failure", async () => {
+  const context = testContext(globalArgs);
+  const { calls } = await withMockedFetch(
+    (request) => {
+      if (request.method === "GET") {
+        return response({
+          ...emptyPageBase,
+          sprites: [rolloutSprite(1), rolloutSprite(2)],
+        });
+      }
+      assertEquals(request.body, null);
+      return new URL(request.url).pathname.includes("worker-2")
+        ? response({ error: "policy absent" }, 404)
+        : new Response(null, { status: 204 });
+    },
+    () =>
+      model.methods.deletePrivilegesPolicy.execute({
+        select: { all: true },
+      }, context),
+  );
+  assertEquals(calls.map((call) => call.method), ["GET", "DELETE", "DELETE"]);
+  assertEquals(calls.slice(1).map((call) => new URL(call.url).pathname), [
+    "/v1/sprites/worker-1/policy/privileges",
+    "/v1/sprites/worker-2/policy/privileges",
+  ]);
+  const writes = context.getWrittenResources();
+  assertEquals(writes.length, 3);
+  assertEquals(writes[2].specName, "privilegesPolicyRollout");
+  assertEquals(writes[2].name, "privilegesPolicyRollout");
+  const summary = model.resources.privilegesPolicyRollout.schema.parse(
+    writes[2].data,
+  );
+  const results: typeof summary.results = [
+    { name: "worker-1", id: "sprite-1", status: "applied" },
+    { name: "worker-2", id: "sprite-2", status: "failed", error: "HTTP 404" },
+  ];
+  assertEquals(summary, {
+    select: { all: true },
+    action: "delete",
+    policy: null,
+    matched: 2,
+    applied: 1,
+    failed: 1,
+    results,
+    observedAt: summary.observedAt,
+  });
+  for (const [index, result] of results.entries()) {
+    assertEquals(writes[index].specName, "spritePrivilegesPolicy");
+    assertEquals(writes[index].name, `privilegesPolicy-${result.name}`);
+    assertEquals(writes[index].data, {
+      ...result,
+      action: "delete",
+      policy: null,
+      observedAt: summary.observedAt,
+    });
+  }
+});
+
+Deno.test("deleteResourcesPolicy uses the resources route and record names", async () => {
+  const context = testContext(globalArgs);
+  const { calls } = await withMockedFetch(
+    [
+      response({ ...emptyPageBase, sprites: [rolloutSprite(1)] }),
+      new Response(null, { status: 204 }),
+    ],
+    () =>
+      model.methods.deleteResourcesPolicy.execute({
+        select: { all: true },
+      }, context),
+  );
+  assertEquals(calls.map((call) => call.method), ["GET", "DELETE"]);
+  assertEquals(
+    new URL(calls[1].url).pathname,
+    "/v1/sprites/worker-1/policy/resources",
+  );
+  assertEquals(
+    context.getWrittenResources().map(({ specName, name }) => ({
+      specName,
+      name,
+    })),
+    [
+      { specName: "spriteResourcesPolicy", name: "resourcesPolicy-worker-1" },
+      { specName: "resourcesPolicyRollout", name: "resourcesPolicyRollout" },
+    ],
   );
 });

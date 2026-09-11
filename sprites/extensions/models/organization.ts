@@ -24,7 +24,11 @@ import {
 
 import { connectorsMethods, connectorsResources } from "./_lib/connectors.ts";
 
-import { NetworkPolicy } from "./_lib/policy.ts";
+import {
+  NetworkPolicy,
+  PrivilegesPolicy,
+  ResourcesPolicy,
+} from "./_lib/policy.ts";
 
 import { spritePath, SpriteResponse } from "./_lib/sprite.ts";
 
@@ -86,23 +90,32 @@ const RolloutResult = z.object({
   status: z.enum(["applied", "failed"]),
   error: z.string().optional(),
 });
-const SpriteNetworkPolicy = RolloutResult.extend({
-  policy: NetworkPolicy,
-  observedAt: z.iso.datetime({ offset: true }),
-});
-const NetworkPolicyRollout = z.object({
-  select: z.object({
-    all: z.literal(true).optional(),
-    prefix: z.string().optional(),
-    labels: z.array(z.string()).optional(),
-  }),
-  policy: NetworkPolicy,
-  matched: z.number().int().nonnegative(),
-  applied: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
-  results: z.array(RolloutResult),
-  observedAt: z.iso.datetime({ offset: true }),
-});
+function rolloutSchemas<P extends z.ZodObject>(Policy: P) {
+  const row = RolloutResult.extend({
+    action: z.enum(["set", "delete"]),
+    policy: Policy.nullable(),
+    observedAt: z.iso.datetime({ offset: true }),
+  });
+  const summary = z.object({
+    select: z.object({
+      all: z.literal(true).optional(),
+      prefix: z.string().optional(),
+      labels: z.array(z.string()).optional(),
+    }),
+    action: z.enum(["set", "delete"]),
+    policy: Policy.nullable(),
+    matched: z.number().int().nonnegative(),
+    applied: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    results: z.array(RolloutResult),
+    observedAt: z.iso.datetime({ offset: true }),
+  });
+  return { row, summary };
+}
+
+const network = rolloutSchemas(NetworkPolicy);
+const privileges = rolloutSchemas(PrivilegesPolicy);
+const resources = rolloutSchemas(ResourcesPolicy);
 
 const retryableStatuses = new Set([429, 502, 503, 504]);
 const maxAttempts = 3;
@@ -218,6 +231,92 @@ async function listAllSprites(
   return { organization, sprites };
 }
 
+/** Set or remove one policy on every selected Sprite, one at a time, recording each outcome as <kind>Policy-<sprite>. */
+async function rolloutPolicy<P extends z.ZodObject>(
+  context: Context,
+  kind: "network" | "privileges" | "resources",
+  action: "set" | "delete",
+  Policy: P,
+  select: z.output<typeof SpriteSelector>,
+  policy: z.output<P> | null,
+) {
+  const { row: rowSchema } = rolloutSchemas(Policy);
+  const specName = {
+    network: "spriteNetworkPolicy",
+    privileges: "spritePrivilegesPolicy",
+    resources: "spriteResourcesPolicy",
+  }[kind];
+  const budget = { remaining: context.globalArgs.maxResponseBytes };
+  const { sprites } = await listAllSprites(context, {
+    prefix: select.prefix,
+  }, budget);
+  const wanted = select.labels ?? [];
+  const matched = sprites.filter((sprite) =>
+    wanted.every((label) => sprite.labels?.includes(label))
+  );
+  const results: z.input<typeof RolloutResult>[] = [];
+  const handles = [];
+  const observedAt = new Date().toISOString();
+  for (const sprite of matched) {
+    let row: z.input<typeof RolloutResult>;
+    try {
+      const path = spritePath(sprite.name, `/policy/${kind}`);
+      if (action === "set") {
+        await emptyRequest(context, "POST", path, { json: policy });
+      } else {
+        await emptyRequest(context, "DELETE", path);
+      }
+      row = {
+        name: sprite.name,
+        id: sprite.id,
+        status: "applied",
+      };
+    } catch (error) {
+      if (context.signal.aborted) throw error;
+      row = {
+        name: sprite.name,
+        id: sprite.id,
+        status: "failed",
+        error: error instanceof ApiError
+          ? `HTTP ${error.status}`
+          : "request failed",
+      };
+    }
+    results.push(row);
+    handles.push(
+      await context.writeResource(
+        specName,
+        `${kind}Policy-${sprite.name}`,
+        rowSchema.parse({
+          ...row,
+          action,
+          policy,
+          observedAt,
+        }),
+      ),
+    );
+  }
+  const applied =
+    results.filter((result) => result.status === "applied").length;
+  context.logger.info(
+    action === "set"
+      ? "Applied {kind} policy to {applied} of {matched} Sprites"
+      : "Removed {kind} policy from {applied} of {matched} Sprites",
+    { kind, applied, matched: matched.length },
+  );
+  const summary = {
+    select,
+    action,
+    policy,
+    matched: matched.length,
+    applied,
+    failed: matched.length - applied,
+    results,
+    observedAt,
+  };
+  return withHandles(summary, handles);
+}
+
 /** The Fly organization the token belongs to: its Sprites and its connections. */
 export const model = {
   type: "@josh/sprites/organization",
@@ -229,12 +328,28 @@ export const model = {
   resources: {
     ...connectorsResources,
     networkPolicyRollout: resource(
-      NetworkPolicyRollout,
-      "Which Sprites the last network policy rollout matched, applied to, and failed on",
+      network.summary,
+      "Which Sprites the last network policy rollout matched, set or removed on, and failed on",
     ),
     spriteNetworkPolicy: resource(
-      SpriteNetworkPolicy,
-      "One Sprite's outcome from the last network policy rollout that matched it; instance name networkPolicy-<sprite>",
+      network.row,
+      "One Sprite's latest outcome from an organization network policy set or removal; instance name networkPolicy-<sprite>",
+    ),
+    privilegesPolicyRollout: resource(
+      privileges.summary,
+      "Which Sprites the last privileges policy rollout matched, set or removed on, and failed on",
+    ),
+    spritePrivilegesPolicy: resource(
+      privileges.row,
+      "One Sprite's latest outcome from an organization privileges policy set or removal; instance name privilegesPolicy-<sprite>",
+    ),
+    resourcesPolicyRollout: resource(
+      resources.summary,
+      "Which Sprites the last resources policy rollout matched, set or removed on, and failed on",
+    ),
+    spriteResourcesPolicy: resource(
+      resources.row,
+      "One Sprite's latest outcome from an organization resources policy set or removal; instance name resourcesPolicy-<sprite>",
     ),
     sprites: resource(
       InventorySchema,
@@ -242,7 +357,6 @@ export const model = {
     ),
   },
   methods: {
-    ...connectorsMethods,
     listSprites: method(
       "Read every Sprite visible to the organization token",
       LookupArgsSchema,
@@ -284,74 +398,77 @@ export const model = {
       "Replace the network policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as networkPolicy-<sprite>",
       z.object({ select: SpriteSelector, policy: NetworkPolicy }),
       "networkPolicyRollout",
-      NetworkPolicyRollout,
-      async (args, context: Context) => {
-        const budget = { remaining: context.globalArgs.maxResponseBytes };
-        const { sprites } = await listAllSprites(context, {
-          prefix: args.select.prefix,
-        }, budget);
-        const wanted = args.select.labels ?? [];
-        const matched = sprites.filter((sprite) =>
-          wanted.every((label) => sprite.labels?.includes(label))
-        );
-        const results: z.input<typeof RolloutResult>[] = [];
-        const handles = [];
-        const observedAt = new Date().toISOString();
-        for (const sprite of matched) {
-          let row: z.input<typeof RolloutResult>;
-          try {
-            await emptyRequest(
-              context,
-              "POST",
-              spritePath(sprite.name, "/policy/network"),
-              { json: args.policy },
-            );
-            row = {
-              name: sprite.name,
-              id: sprite.id,
-              status: "applied",
-            };
-          } catch (error) {
-            if (context.signal.aborted) throw error;
-            row = {
-              name: sprite.name,
-              id: sprite.id,
-              status: "failed",
-              error: error instanceof ApiError
-                ? `HTTP ${error.status}`
-                : "request failed",
-            };
-          }
-          results.push(row);
-          handles.push(
-            await context.writeResource(
-              "spriteNetworkPolicy",
-              `networkPolicy-${sprite.name}`,
-              SpriteNetworkPolicy.parse({
-                ...row,
-                policy: args.policy,
-                observedAt,
-              }),
-            ),
-          );
-        }
-        const applied =
-          results.filter((result) => result.status === "applied").length;
-        context.logger.info(
-          "Applied network policy to {applied} of {matched} Sprites",
-          { applied, matched: matched.length },
-        );
-        const summary = {
-          select: args.select,
-          policy: args.policy,
-          matched: matched.length,
-          applied,
-          failed: matched.length - applied,
-          results,
-          observedAt,
-        };
-        return withHandles(summary, handles);
-      },
+      network.summary,
+      (args, context: Context) =>
+        rolloutPolicy(
+          context,
+          "network",
+          "set",
+          NetworkPolicy,
+          args.select,
+          args.policy,
+        ),
     ),
+    setPrivilegesPolicy: method(
+      "Set the privileges policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as privilegesPolicy-<sprite>",
+      z.object({ select: SpriteSelector, policy: PrivilegesPolicy }),
+      "privilegesPolicyRollout",
+      privileges.summary,
+      (args, context: Context) =>
+        rolloutPolicy(
+          context,
+          "privileges",
+          "set",
+          PrivilegesPolicy,
+          args.select,
+          args.policy,
+        ),
+    ),
+    setResourcesPolicy: method(
+      "Set the resources policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as resourcesPolicy-<sprite>",
+      z.object({ select: SpriteSelector, policy: ResourcesPolicy }),
+      "resourcesPolicyRollout",
+      resources.summary,
+      (args, context: Context) =>
+        rolloutPolicy(
+          context,
+          "resources",
+          "set",
+          ResourcesPolicy,
+          args.select,
+          args.policy,
+        ),
+    ),
+    deletePrivilegesPolicy: method(
+      "Remove the privileges policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as privilegesPolicy-<sprite>",
+      z.object({ select: SpriteSelector }),
+      "privilegesPolicyRollout",
+      privileges.summary,
+      (args, context: Context) =>
+        rolloutPolicy(
+          context,
+          "privileges",
+          "delete",
+          PrivilegesPolicy,
+          args.select,
+          null,
+        ),
+    ),
+    deleteResourcesPolicy: method(
+      "Remove the resources policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as resourcesPolicy-<sprite>",
+      z.object({ select: SpriteSelector }),
+      "resourcesPolicyRollout",
+      resources.summary,
+      (args, context: Context) =>
+        rolloutPolicy(
+          context,
+          "resources",
+          "delete",
+          ResourcesPolicy,
+          args.select,
+          null,
+        ),
+    ),
+    ...connectorsMethods,
   },
 };
