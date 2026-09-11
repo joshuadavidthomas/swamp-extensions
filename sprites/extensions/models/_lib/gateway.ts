@@ -5,7 +5,7 @@ import * as https from "node:https";
 import type { IncomingMessage } from "node:http";
 import { Duplex } from "node:stream";
 import * as tls from "node:tls";
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   BinaryFile,
   concatenate,

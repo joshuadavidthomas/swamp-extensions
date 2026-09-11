@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { withMockedFetch } from "@swamp-club/swamp-testing";
+import {
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@1.0.14";
+import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import { testContext } from "./_lib/test_support.ts";
 import { model } from "./sprite.ts";
 import { type SpriteContext, spritePath } from "./_lib/sprite.ts";

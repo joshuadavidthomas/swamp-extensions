@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Sprite task collection, read through the local management socket. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { Empty, method, resource } from "./core.ts";
 import { executeHttp } from "./exec.ts";
 import { type ManagementExec, read } from "./local-api.ts";

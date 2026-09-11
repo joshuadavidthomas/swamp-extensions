@@ -9,7 +9,7 @@
 import * as net from "node:net";
 import { Buffer } from "node:buffer";
 import { Duplex } from "node:stream";
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   concatenate,
   deadline,

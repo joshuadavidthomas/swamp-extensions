@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { assertEquals, assertRejects } from "@std/assert";
-import { withMockedFetch } from "@swamp-club/swamp-testing";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.14";
+import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import { type ManagementExec } from "./_lib/local-api.ts";
 import { createMethods } from "./task.ts";
 import { TaskExpiry } from "./_lib/tasks.ts";

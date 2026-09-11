@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Command execution over HTTP and WebSocket, terminal sizing, and session lifecycle. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   apiUrl,
   BinaryFile,

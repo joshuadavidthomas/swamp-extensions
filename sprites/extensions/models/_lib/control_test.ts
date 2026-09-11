@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { method } from "./core.ts";
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { type ConnectChannel } from "./socket.ts";
 import {
   assert,
@@ -8,8 +8,8 @@ import {
   assertFalse,
   assertRejects,
   assertThrows,
-} from "@std/assert";
-import { createModelTestContext } from "@swamp-club/swamp-testing";
+} from "jsr:@std/assert@1.0.14";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import {
   ControlExecArgs,
   controlResources,

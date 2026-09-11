@@ -2,10 +2,10 @@
 import {
   createModelTestContext,
   withMockedFetch,
-} from "@swamp-club/swamp-testing";
+} from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import { type Auth, type Context } from "./core.ts";
 import { type Channel, type Message } from "./socket.ts";
-import { assertEquals } from "@std/assert";
+import { assertEquals } from "jsr:@std/assert@1.0.14";
 import { type SpriteContext, spriteMethods } from "./sprite.ts";
 import { checkpointsMethods } from "./checkpoints.ts";
 import { policyMethods } from "./policy.ts";

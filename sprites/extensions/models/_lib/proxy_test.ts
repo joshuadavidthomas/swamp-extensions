@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { withMockedFetch } from "@swamp-club/swamp-testing";
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.14";
 import type { Query } from "./core.ts";
 import type { Channel, Message } from "./socket.ts";
 import { connectExecProxy, ProxyArgs, runProxy } from "./proxy.ts";

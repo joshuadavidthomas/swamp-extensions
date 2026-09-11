@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /** The Sprite's local management API at /.sprite/api.sock, reached with curl through authenticated exec.
  * None of these routes appear in sprites.dev/api or docs.sprites.dev; they were verified live. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { type Context, deadline } from "./core.ts";
 import { executeHttp } from "./exec.ts";
 

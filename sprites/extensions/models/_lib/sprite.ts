@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Sprite identity and base lifecycle routes. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { createHash } from "node:crypto";
 import {
   ApiError,

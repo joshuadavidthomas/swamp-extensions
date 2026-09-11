@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-import { assertEquals } from "@std/assert";
-import { withMockedFetch } from "@swamp-club/swamp-testing";
-import { z } from "zod";
+import { assertEquals } from "jsr:@std/assert@1.0.14";
+import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
+import { z } from "npm:zod@4.4.3";
 import { ApiError } from "./core.ts";
 import { fanOut, SpriteSelector } from "./fanout.ts";
 import { globalArgs, json, sprite, testContext } from "./test_support.ts";

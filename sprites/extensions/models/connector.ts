@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** One organization connection to a provider, bound by its saved connection id. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   ApiError,
   AuthSchema,

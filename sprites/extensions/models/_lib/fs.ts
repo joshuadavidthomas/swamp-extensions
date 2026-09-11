@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Native filesystem routes and bounded filesystem watch. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   BinaryFile,
   decodeFrame,

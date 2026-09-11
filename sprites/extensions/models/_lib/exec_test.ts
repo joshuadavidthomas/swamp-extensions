@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { concatenate, method } from "./core.ts";
-import { z } from "zod";
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { createModelTestContext } from "@swamp-club/swamp-testing";
+import { z } from "npm:zod@4.4.3";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@1.0.14";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import {
   AttachArgs,
   decodeHttpExec,

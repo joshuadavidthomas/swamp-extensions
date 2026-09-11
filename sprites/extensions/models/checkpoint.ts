@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** One named slot holding a Sprite checkpoint. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   Empty,
   jsonRequest,

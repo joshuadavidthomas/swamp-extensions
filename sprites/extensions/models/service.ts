@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** One service on a Sprite: its definition, lifecycle, logs, and signal. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   ApiError,
   type Context,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1.0.14";
 import { type Message } from "./socket.ts";
 import {
   binaryFrame,

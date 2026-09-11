@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Sprite service configuration, lifecycle, and logs. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   type Context,
   Empty,

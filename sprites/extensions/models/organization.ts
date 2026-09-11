@@ -8,7 +8,7 @@
  * @module
  */
 
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   ApiError,
   AuthSchema,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Bounded sequential exec operations over a persistent control channel. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import {
   BinaryFile,
   concatenate,

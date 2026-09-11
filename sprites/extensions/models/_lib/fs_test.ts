@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { withMockedFetch } from "@swamp-club/swamp-testing";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.14";
+import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import {
   FakeChannel,
   globalArgs,

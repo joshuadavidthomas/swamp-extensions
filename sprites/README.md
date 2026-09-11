@@ -1,31 +1,20 @@
 # @josh/sprites
 
-[Swamp](https://github.com/swamp-club/swamp) models for
-[Sprites](https://sprites.dev): execution, files, services, checkpoints,
-policies, networking, and connectors.
+[Swamp](https://github.com/swamp-club/swamp) models for [Fly.io Sprites](https://sprites.dev). Run commands, read and write files, manage services and checkpoints, and control network access.
 
-| Model type                   | Scope                                                            |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `@josh/sprites/organization` | The token's Fly organization and its Sprite and connector lists. |
-| `@josh/sprites/sprite`       | One named Sprite: execution, files, policies, and networking.    |
-| `@josh/sprites/service`      | One Sprite service: definition, lifecycle, logs, and signal.     |
-| `@josh/sprites/checkpoint`   | One named slot holding a Sprite checkpoint.                      |
-| `@josh/sprites/task`         | One task hold on a Sprite.                                       |
-| `@josh/sprites/connector`    | One organization connection: policy and OAuth.                   |
+## Installation
 
-## Setup
-
-This package is unpublished. From another Swamp repository, load its source:
+This package is unpublished. Install Swamp and clone this repository, then run this command from your own Swamp repository:
 
 ```sh
 swamp extension source add /path/to/sprite-swamp/sprites
 ```
 
-When developing in this checkout, run Swamp from `sprites/`; it discovers the
-models there automatically.
+## Usage
 
-Store your organization token in an existing Swamp vault. These examples use a
-vault named `sprites-secrets`:
+You need a Sprites organization token and an existing Swamp vault. These examples use a vault named `sprites-secrets`. The `vault put` command prompts for the token.
+
+The `create` method below creates a remote Sprite; provider charges apply. To use an existing Sprite, set `name` to its name and run `lookup` instead.
 
 ```sh
 swamp vault put sprites-secrets API_TOKEN
@@ -33,112 +22,106 @@ swamp model create @josh/sprites/sprite build-sprite \
   --global-arg name=build-worker \
   --global-arg 'token=${{ vault.get("sprites-secrets", "API_TOKEN") }}'
 swamp model method run build-sprite create
-swamp model create @josh/sprites/service build-web \
-  --global-arg sprite=build-worker --global-arg service_name=web \
-  --global-arg 'token=${{ vault.get("sprites-secrets", "API_TOKEN") }}'
 ```
 
-The token determines the organization. Use separate model instances and vault
-keys for different organizations.
+The token determines the organization. Use separate model instances and vault keys for different organizations.
 
-## Usage
-
-The setup creates a remote Sprite; provider charges apply. Configure its service
-and run code on it:
+Check the Python version on the Sprite:
 
 ```sh
-swamp model method run build-web put --input '{"service":{"cmd":"python3","args":["-m","http.server","8080"],"http_port":8080}}'
-swamp model method run build-sprite exec --input '{"cmd":["python3","-c","print(6 * 7)"]}'
+swamp model method run build-sprite exec --input '{"cmd":["python3","--version"]}'
 swamp data get build-sprite execStdout
 ```
 
-For an existing Sprite, run `lookup` instead of `create` to save its identity.
-Mutations check that identity and reject a replacement with the same name.
-Inspect the target before deleting it:
+Define an HTTP service using the Sprite's saved name:
+
+```sh
+swamp model create @josh/sprites/service build-web \
+  --global-arg 'sprite=${{ data.latest("build-sprite", "state").attributes.name }}' \
+  --global-arg service_name=web \
+  --global-arg 'token=${{ vault.get("sprites-secrets", "API_TOKEN") }}'
+swamp model method run build-web put --input '{"service":{"cmd":"python3","args":["-m","http.server","8080"],"http_port":8080}}'
+```
+
+Check that the service responds at the Sprite's URL:
+
+```sh
+swamp model method run build-sprite probeUrl
+swamp data get build-sprite probeUrl
+```
+
+`probeUrl` requires an HTTP 200 response and saves the response size and SHA-256 hash.
+
+The Sprite model saves the remote ID during `create` or `lookup`. Later changes check that ID and refuse to act on a replacement Sprite with the same name. When you are done, inspect the saved ID and name before deleting the Sprite:
 
 ```sh
 swamp model get build-sprite --json
 swamp model method run build-sprite delete
 ```
 
-Find methods, arguments, and output schemas through Swamp:
+## Models
+
+| Model type | Manages |
+| --- | --- |
+| `@josh/sprites/checkpoint` | A Sprite checkpoint: create, look up, and restore. |
+| `@josh/sprites/connector` | A provider connection and its Sprite access policy. |
+| `@josh/sprites/organization` | Sprite and connector lists, plus operations across multiple Sprites. |
+| `@josh/sprites/service` | One service on a Sprite: configuration, start and stop, logs, and signals. |
+| `@josh/sprites/sprite` | One named Sprite: commands, files, policies, and networking. |
+| `@josh/sprites/task` | A hold that keeps a Sprite awake until it expires. |
+
+Inspect any model type's methods, arguments, and output schemas:
 
 ```sh
 swamp model type describe @josh/sprites/sprite --json
-swamp model type describe @josh/sprites/organization --json
-swamp model type describe @josh/sprites/connector --json
 ```
 
-File writes, exec stdin, and gateway bodies accept
-`{"kind":"text","text":"hello\n"}` or `{"kind":"base64","base64":"AP8="}`. They
-never read files from the Swamp host. Exec saves an `exec` record and binary
-`execStdout` and `execStderr` files; `failOnNonZero: false` retains nonzero
-exits.
+File writes, command input (stdin), and HTTP gateway request bodies accept `{"kind":"text","text":"hello\n"}` or `{"kind":"base64","base64":"AP8="}`. Supply the contents directly; these methods do not read files from the Swamp host.
 
-Reference stored results in model definitions with CEL, for example
-`${{ data.latest("build-sprite", "state").attributes.name }}`.
+Sprite `exec` saves an `exec` record and binary `execStdout` and `execStderr` files. By default, a nonzero exit fails the method before it saves output. Set `failOnNonZero: false` to save the exit code and output instead.
 
 ## Operational limits
 
-- Store credentials in vaults. Binary artifacts are unencrypted files and expire
-  after seven days; restrict repository and server access. Multi-artifact writes
-  are not transactional.
-- Requests default to a 64 MiB response cap. Inventory uses a 30-second timeout;
-  Sprite and connector operations default to five minutes. Set `timeoutMs` and
-  `maxResponseBytes` in model global arguments when needed. After a failed
-  mutation, inspect remote state before retrying.
-- Sprite `upgrade` and `restart` record request acceptance. Check the resulting
-  runtime separately. Service startup events also need an application readiness
-  check.
-- Service `signal`, Sprite `listTasks`, and task `create`, `get`, `refresh`, and
-  `delete` use `/usr/bin/curl` against `/.sprite/api.sock` through authenticated
-  exec. Child models save their Sprite identity; later calls reject a
-  replacement. The organization token stays outside the Sprite.
-- The TCP proxy runs over an authenticated exec relay and requires
-  `/.sprite/bin/python3` inside the Sprite. Sized TTY commands also require it.
-  The API's native proxy and the control-channel proxy were tested live and did
-  not forward TCP closure to the client, which is why the exec relay is used.
-- Stopping a service does not prevent its startup after reboot. Delete its
-  definition for that. Explicitly stopped HTTP services need service `start` to
-  resume; an incoming request alone does not start them.
-- Checkpoints restore the writable overlay. They do not roll back `/tmp`. Task
-  snapshots do not renew holds; refresh or release tasks explicitly.
-- Connector policy updates replace the whole policy. Provisioning alone does not
-  grant Sprite access; an empty policy denies access.
-- Organization fan-outs match Sprites by prefix or labels at call time, act one
-  Sprite at a time, record failures per Sprite and continue, and check no Sprite
-  instance's saved identity. Each fan-out method saves its summary under its own
-  name and each Sprite's outcome as `<method>-<sprite>`, or
-  `<method>-<service_name>-<sprite>` for the service methods. Fleet exec saves
-  `exec-stdout-<sprite>` and `exec-stderr-<sprite>`. Fleet `exec` gives each
-  Sprite the organization instance’s `timeoutMs`, which defaults to 30 seconds,
-  so raise it for slow commands.
+### Stored data and request limits
 
-## Development
+Store credentials in vaults and restrict access to the Swamp repository and server. Binary output files may contain application secrets and expire after seven days. A failed method can leave some files or records saved and others missing.
 
-Every entity model keeps its entity in `state`; everything else a method saves
-is named after the method.
+Responses have a default 64 MiB cap. Organization requests default to a 30-second timeout per request; other models default to five minutes. Set `timeoutMs` and `maxResponseBytes` in model global arguments to change these limits. After a failed change, check the remote resource before retrying.
 
-From `sprites/`, use Swamp's bundled Deno or a current Deno on PATH:
+### Services and runtime changes
 
-```sh
-deno task check
-deno task lint
-deno task fmt
-deno task fmt:check
-deno task test
-deno task test:transport
-swamp doctor extensions --json
-swamp extension fmt manifest.yaml --check --json
-swamp extension quality manifest.yaml --json
-```
+A successful Sprite `upgrade` or `restart` only means that the API accepted the request. Check the runtime to confirm the change took effect. After a service startup event, check that the application is ready to handle requests.
 
-Source files and their tests live in `extensions/models/`, with shared helpers
-in `extensions/models/_lib/`.
+A stopped service can start again after reboot. Delete its definition to prevent that. To resume an explicitly stopped HTTP service, run service `start`; an incoming HTTP request alone will not start it.
 
-Transport tests use `openssl` and local TLS/WebSocket servers. The default test
-suites make no Sprites API calls.
+### Commands inside the Sprite
+
+Some methods require programs inside the Sprite:
+
+- Service `signal`, Sprite `listTasks`, and task methods require `/usr/bin/curl`.
+- Sprite `proxy`, `gatewayList`, and `gatewayRequest` require `/.sprite/bin/python3`.
+- Starting a TTY session with an explicit terminal size through `exec` or `controlExec` also requires `/.sprite/bin/python3`.
+
+Service, checkpoint, and task models save the Sprite's ID and reject a replacement with the same name on later calls. The organization token stays outside the Sprite.
+
+### Checkpoints, tasks, and connectors
+
+Restoring a checkpoint replaces the writable filesystem overlay and leaves `/tmp` unchanged. Before restoring, inspect the checkpoint model and verify its saved Sprite ID and checkpoint ID.
+
+Checkpoint creation saves the newest checkpoint returned by the API. Avoid concurrent checkpoint creation on the same Sprite: the model could save a checkpoint created by another caller.
+
+Task holds expire after at most one hour. Reading a task or saving its state does not extend the hold. Use `refresh` to renew it or `delete` to release it early.
+
+Connector policy updates replace the whole policy. Provisioning a connection alone does not grant Sprite access; an empty policy denies access.
+
+### Operations across multiple Sprites
+
+Organization methods that act on multiple Sprites select them by prefix or labels when called. They process one Sprite at a time and continue after recording a failure. They use the current inventory without checking IDs saved by individual Sprite models. Before a bulk restart, service deletion, or policy change, run `listSprites` and verify the target names and IDs.
+
+Each method saves its summary under the method name. Per-Sprite results use `<method>-<sprite>`, or `<method>-<service_name>-<sprite>` for service methods. Organization `exec` saves `exec-stdout-<sprite>` and `exec-stderr-<sprite>`. It records nonzero exits rather than failing the whole run.
+
+Each command gets the organization model's `timeoutMs`, which defaults to 30 seconds. Raise it for slow commands; it limits each command, not the full run.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+`@josh/sprites` is licensed under the MIT license. See the [`LICENSE`](LICENSE.md) file for more information.

@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.14";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import type * as https from "node:https";

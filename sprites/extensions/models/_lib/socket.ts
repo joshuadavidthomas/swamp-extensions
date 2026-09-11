@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Authenticated, cancellable WebSocket transport with bounded receive queues. @module */
-import WebSocket from "ws";
+import WebSocket from "npm:ws@8.21.3";
 import { Buffer } from "node:buffer";
 import {
   apiUrl,
@@ -9,7 +9,7 @@ import {
   decodeFrame,
   type Query,
 } from "./core.ts";
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { type SpriteContext, spritePath } from "./sprite.ts";
 
 // @deno-types="npm:@types/ws@8.18.1"

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Shared HTTP, output, and method boundaries for the Sprites API. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 
 export const Empty = z.object({});
 export const Environment = z.record(z.string(), z.string()).meta({

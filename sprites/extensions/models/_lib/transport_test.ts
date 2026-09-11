@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
-import { withMockedFetch } from "@swamp-club/swamp-testing";
+import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import {
   assert,
   assertEquals,
   assertRejects,
   assertStrictEquals,
-} from "@std/assert";
+} from "jsr:@std/assert@1.0.14";
 import * as https from "node:https";
 import * as net from "node:net";
 import * as tls from "node:tls";
 import { Buffer } from "node:buffer";
 // @deno-types="npm:@types/ws@8.18.1"
-import WebSocket, { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "npm:ws@8.21.3";
 import { executeHttp } from "./exec.ts";
 import { requestGateway } from "./gateway.ts";
 import { openChannel, type SocketFactory } from "./socket.ts";

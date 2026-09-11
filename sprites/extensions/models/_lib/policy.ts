@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Sprite network, privilege, and resource policy routes. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { Empty, emptyRequest, jsonRequest, method, resource } from "./core.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite.ts";
 

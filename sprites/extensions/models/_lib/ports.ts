@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Bounded listening-port snapshots and notifications. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { decodeFrame, method, resource } from "./core.ts";
 import { type ConnectChannel, observeChannel, openChannel } from "./socket.ts";
 import { type SpriteContext } from "./sprite.ts";

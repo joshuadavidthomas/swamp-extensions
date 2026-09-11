@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Organization connector schemas and collection read; credentials are excluded. @module */
-import { z } from "zod";
+import { z } from "npm:zod@4.4.3";
 import { jsonRequest, method, resource } from "./core.ts";
 
 export const AccessPolicySchema = z.object({
