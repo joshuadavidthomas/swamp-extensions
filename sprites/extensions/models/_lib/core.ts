@@ -71,6 +71,7 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly method: string,
     public readonly path: string,
+    public readonly retryAfter: string | null = null,
   ) {
     super(`Sprites ${method} ${path} returned HTTP ${status}`);
   }
@@ -139,7 +140,12 @@ export async function request(
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => {});
-    throw new ApiError(response.status, method, path);
+    throw new ApiError(
+      response.status,
+      method,
+      path,
+      response.headers.get("retry-after"),
+    );
   }
   return response;
 }
@@ -179,10 +185,16 @@ export async function jsonRequest<S extends z.ZodType>(
   method: string,
   path: string,
   schema: S,
-  options: Parameters<typeof request>[3] = {},
+  options: Parameters<typeof request>[3] & { budget?: { remaining: number } } =
+    {},
 ): Promise<z.output<S>> {
-  const response = await request(ctx, method, path, options);
-  const bytes = await responseBytes(response, ctx.globalArgs.maxResponseBytes);
+  const { budget, ...requestOptions } = options;
+  const response = await request(ctx, method, path, requestOptions);
+  const bytes = await responseBytes(
+    response,
+    budget?.remaining ?? ctx.globalArgs.maxResponseBytes,
+  );
+  if (budget) budget.remaining -= bytes.length;
   let decoded: unknown;
   try {
     decoded = JSON.parse(

@@ -17,6 +17,7 @@ import {
   method,
   ndjson,
   responseBytes,
+  ResponseLimitError,
   segment,
   withHandles,
 } from "./core.ts";
@@ -327,4 +328,26 @@ Deno.test("concatenate preserves binary chunks and handles empty input", () => {
     ]),
     new Uint8Array([0, 255, 128]),
   );
+});
+
+Deno.test("JSON calls share one wire-byte budget", async () => {
+  const wire = JSON.stringify("雪");
+  const size = new TextEncoder().encode(wire).length;
+  const budget = { remaining: size * 2 - 1 };
+  const { calls } = await withMockedFetch(
+    () => new Response(wire),
+    async () => {
+      assertEquals(
+        await jsonRequest(ctx, "GET", "/value", z.string(), { budget }),
+        "雪",
+      );
+      assertEquals(budget.remaining, size - 1);
+      await assertRejects(
+        () => jsonRequest(ctx, "GET", "/value", z.string(), { budget }),
+        ResponseLimitError,
+        "maxResponseBytes",
+      );
+    },
+  );
+  assertEquals(calls.length, 2);
 });

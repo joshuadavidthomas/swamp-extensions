@@ -2,19 +2,20 @@
 
 /**
  * Swamp model for reading a Fly.io Sprites organization inventory.
- * The model keeps API credentials out of stored data and normalizes API values
- * into JSON-safe fields that other models can read with CEL expressions.
+ * The model keeps API credentials out of stored data and preserves API Sprite
+ * fields for other models to read with CEL expressions.
  *
  * @module
  */
 
 import { z } from "zod";
 import {
+  ApiError,
   AuthSchema,
   type Context,
+  jsonRequest,
   method,
   resource,
-  responseBytes,
   ResponseLimitError,
 } from "./_lib/core.ts";
 
@@ -27,27 +28,6 @@ const LookupArgsSchema = z.object({
   pageSize: z.number().int().min(1).max(500).default(500).describe(
     "Sprites requested per API page.",
   ),
-});
-
-const UrlSettingsSchema = z.object({
-  auth: z.enum(["sprite", "public"]),
-  privateAccess: z.enum(["admins", "org_users"]).nullable(),
-});
-
-const SpriteSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  organization: z.string(),
-  status: z.enum(["cold", "warm", "running"]),
-  createdAt: z.iso.datetime({ offset: true }),
-  updatedAt: z.iso.datetime({ offset: true }),
-  url: z.string(),
-  urlSettings: UrlSettingsSchema.nullable(),
-  version: z.string().nullable(),
-  environmentVersion: z.string().nullable(),
-  labels: z.array(z.string()),
-  lastRunningAt: z.iso.datetime({ offset: true }).nullable(),
-  lastWarmingAt: z.iso.datetime({ offset: true }).nullable(),
 });
 
 const ApiPageSchema = z.object({
@@ -74,46 +54,20 @@ const InventorySchema = z.object({
     warm: z.number().int().nonnegative(),
     cold: z.number().int().nonnegative(),
   }),
-  sprites: z.array(SpriteSchema),
+  sprites: z.array(SpriteResponse),
   prefix: z.string().nullable(),
   truncated: z.boolean(),
   observedAt: z.iso.datetime({ offset: true }),
 });
 
 type ApiPage = z.infer<typeof ApiPageSchema>;
-type ApiSprite = z.infer<typeof SpriteResponse>;
 type Inventory = z.infer<typeof InventorySchema>;
-type NormalizedSprite = z.infer<typeof SpriteSchema>;
 
-function withoutTrailingSlash(url: string): string {
-  return url.replace(/\/+$/, "");
-}
+const retryableStatuses = new Set([429, 502, 503, 504]);
+const maxAttempts = 3;
 
-function normalizeSprite(sprite: ApiSprite): NormalizedSprite {
-  return {
-    id: sprite.id,
-    name: sprite.name,
-    organization: sprite.organization,
-    status: sprite.status,
-    createdAt: sprite.created_at,
-    updatedAt: sprite.updated_at,
-    url: sprite.url,
-    urlSettings: sprite.url_settings
-      ? {
-        auth: sprite.url_settings.auth,
-        privateAccess: sprite.url_settings.private_access ?? null,
-      }
-      : null,
-    version: sprite.version ?? null,
-    environmentVersion: sprite.environment_version ?? null,
-    labels: sprite.labels ?? [],
-    lastRunningAt: sprite.last_running_at ?? null,
-    lastWarmingAt: sprite.last_warming_at ?? null,
-  };
-}
-
-function retryDelayMs(response: Response, attempt: number): number {
-  const retryAfter = response.headers.get("retry-after");
+function retryDelayMs(error: unknown, attempt: number): number {
+  const retryAfter = error instanceof ApiError ? error.retryAfter : null;
   if (retryAfter) {
     const seconds = Number(retryAfter);
     if (Number.isFinite(seconds) && seconds >= 0) {
@@ -133,15 +87,7 @@ function waitForRetry(
   milliseconds: number,
   signal: AbortSignal,
 ): Promise<void> {
-  if (signal.aborted) {
-    return Promise.reject(
-      signal.reason ?? new DOMException("Aborted", "AbortError"),
-    );
-  }
-  if (milliseconds === 0) {
-    return Promise.resolve();
-  }
-
+  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
@@ -149,99 +95,45 @@ function waitForRetry(
     }, milliseconds);
     const onAbort = (): void => {
       clearTimeout(timer);
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      reject(signal.reason);
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
 async function listSpritesPage(
-  globalArgs: Context["globalArgs"],
-  signal: AbortSignal,
+  ctx: Context,
   args: z.infer<typeof LookupArgsSchema>,
   budget: { remaining: number },
   continuationToken?: string,
 ): Promise<ApiPage> {
-  const url = new URL("/v1/sprites", withoutTrailingSlash(globalArgs.baseUrl));
-  url.searchParams.set("max_results", String(args.pageSize));
-  if (args.prefix) {
-    url.searchParams.set("prefix", args.prefix);
-  }
-  if (continuationToken) {
-    url.searchParams.set("continuation_token", continuationToken);
-  }
-
-  const retryableStatuses = new Set([429, 502, 503, 504]);
-  const maxAttempts = 3;
-  let response: Response;
-  let body = "";
-
   for (let attempt = 1;; attempt += 1) {
     try {
-      response = await fetch(url, {
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${globalArgs.token}`,
+      return await jsonRequest(ctx, "GET", "/v1/sprites", ApiPageSchema, {
+        query: {
+          max_results: args.pageSize,
+          prefix: args.prefix,
+          continuation_token: continuationToken,
         },
-        redirect: "error",
-        signal: AbortSignal.any([
-          signal,
-          AbortSignal.timeout(globalArgs.timeoutMs),
-        ]),
+        budget,
       });
-      const bytes = await responseBytes(response, budget.remaining);
-      budget.remaining -= bytes.length;
-      body = new TextDecoder().decode(bytes);
     } catch (error) {
-      if (
-        signal.aborted || error instanceof ResponseLimitError ||
-        attempt === maxAttempts
-      ) {
-        throw new Error("Sprites API request failed", {
-          cause: error,
-        });
+      if (ctx.signal.aborted) throw error;
+      if (error instanceof ResponseLimitError) throw error;
+      if (error instanceof ApiError && !retryableStatuses.has(error.status)) {
+        throw error;
       }
-      await waitForRetry(250 * 2 ** (attempt - 1), signal);
-      continue;
-    }
-
-    if (
-      response.ok || !retryableStatuses.has(response.status) ||
-      attempt === maxAttempts
-    ) {
-      break;
-    }
-    if (attempt < maxAttempts) {
-      const delay = retryDelayMs(response, attempt);
-      if (delay > globalArgs.timeoutMs) {
+      if (attempt === maxAttempts) throw error;
+      const delay = retryDelayMs(error, attempt);
+      if (delay > ctx.globalArgs.timeoutMs) {
         throw new Error(
-          `Sprites API returned HTTP ${response.status} with a retry delay of ${delay}ms, longer than timeoutMs`,
+          `Sprites API asked for a retry delay of ${delay}ms, longer than timeoutMs`,
+          { cause: error },
         );
       }
-      await waitForRetry(delay, signal);
+      await waitForRetry(delay, ctx.signal);
     }
   }
-
-  if (!response.ok) {
-    throw new Error(`Sprites API returned HTTP ${response.status}`);
-  }
-
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(body);
-  } catch {
-    throw new Error("Sprites API returned invalid JSON.");
-  }
-
-  const parsed = ApiPageSchema.safeParse(decoded);
-  if (!parsed.success) {
-    throw new Error(
-      `Sprites API returned an unexpected list response: ${
-        z.prettifyError(parsed.error)
-      }`,
-    );
-  }
-  return parsed.data;
 }
 
 /** Fly.io Sprites organization inventory model. */
@@ -269,80 +161,44 @@ export const model = {
           prefix: args.prefix ?? "all",
         });
 
-        const sprites: ApiSprite[] = [];
         const budget = { remaining: context.globalArgs.maxResponseBytes };
-        const seenContinuationTokens = new Set<string>();
-        let continuationToken: string | undefined;
-        let organizationName: string | undefined;
-        let runningLimit: number | undefined;
-        let warmLimit: number | undefined;
-
-        try {
-          do {
-            const page = await listSpritesPage(
-              context.globalArgs,
-              context.signal,
-              args,
-              budget,
-              continuationToken,
+        const seenTokens = new Set<string>();
+        let page = await listSpritesPage(context, args, budget);
+        const organization = {
+          name: page.name,
+          runningLimit: page.running_limit ?? null,
+          warmLimit: page.warm_limit ?? null,
+        };
+        const sprites = [...page.sprites];
+        while (page.has_more) {
+          const token = page.next_continuation_token;
+          if (!token) {
+            throw new Error(
+              "Sprites API reported another page without a continuation token",
             );
-
-            sprites.push(...page.sprites);
-            organizationName ??= page.name;
-            runningLimit ??= page.running_limit ?? undefined;
-            warmLimit ??= page.warm_limit ?? undefined;
-
-            if (!page.has_more) {
-              continuationToken = undefined;
-              break;
-            }
-
-            const nextToken = page.next_continuation_token ?? undefined;
-            if (!nextToken) {
-              throw new Error(
-                "Sprites API reported another page without a continuation token",
-              );
-            }
-            if (seenContinuationTokens.has(nextToken)) {
-              throw new Error(
-                "Sprites API repeated a continuation token while listing Sprites",
-              );
-            }
-
-            seenContinuationTokens.add(nextToken);
-            continuationToken = nextToken;
-          } while (continuationToken);
-        } catch (error) {
-          throw new Error(
-            "Could not read Sprites organization inventory",
-            { cause: error },
-          );
+          }
+          if (seenTokens.has(token)) {
+            throw new Error(
+              "Sprites API repeated a continuation token while listing Sprites",
+            );
+          }
+          seenTokens.add(token);
+          page = await listSpritesPage(context, args, budget, token);
+          sprites.push(...page.sprites);
         }
 
-        organizationName ??= sprites[0]?.organization;
-        if (!organizationName) {
-          throw new Error(
-            "Sprites API response did not identify the token's organization",
-          );
-        }
-
-        const normalizedSprites = sprites.map(normalizeSprite);
         const statusCounts = { running: 0, warm: 0, cold: 0 };
-        for (const sprite of normalizedSprites) {
+        for (const sprite of sprites) {
           statusCounts[sprite.status] += 1;
         }
 
         const inventory: Inventory = {
-          organization: {
-            name: organizationName,
-            runningLimit: runningLimit ?? null,
-            warmLimit: warmLimit ?? null,
-          },
+          organization,
           counts: {
-            total: normalizedSprites.length,
+            total: sprites.length,
             ...statusCounts,
           },
-          sprites: normalizedSprites,
+          sprites,
           prefix: args.prefix ?? null,
           truncated: false,
           observedAt: new Date().toISOString(),

@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import {
-  assertEquals,
-  assertIsError,
-  assertRejects,
-  assertStringIncludes,
-} from "@std/assert";
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import {
   createModelTestContext,
   withMockedFetch,
@@ -137,30 +132,23 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
       name: "worker-1",
       organization: "acme",
       status: "running",
-      createdAt: "2026-09-07T12:00:00+02:00",
-      updatedAt: "2026-09-09T09:00:00Z",
+      created_at: "2026-09-07T12:00:00+02:00",
+      updated_at: "2026-09-09T09:00:00Z",
       url: "https://worker-1.example.com",
-      urlSettings: { auth: "sprite", privateAccess },
-      version: null,
-      environmentVersion: null,
+      url_settings: { auth: "sprite", private_access: privateAccess },
       labels: ["ci"],
-      lastRunningAt: "2026-09-09T11:30:00+02:00",
-      lastWarmingAt: null,
+      last_running_at: "2026-09-09T11:30:00+02:00",
     },
     {
       id: "sprite-2",
       name: "worker-2",
       organization: "acme",
       status: "cold",
-      createdAt: "2026-09-08T10:00:00Z",
-      updatedAt: "2026-09-09T10:00:00Z",
+      created_at: "2026-09-08T10:00:00Z",
+      updated_at: "2026-09-09T10:00:00Z",
       url: "https://worker-2.example.com",
-      urlSettings: null,
-      version: null,
-      environmentVersion: null,
+      url_settings: null,
       labels: [],
-      lastRunningAt: null,
-      lastWarmingAt: null,
     },
   ]);
 });
@@ -201,12 +189,11 @@ Deno.test("lookup rejects a null cursor when the API reports more pages", async 
             globalArgs,
           }),
         Error,
-        "Could not read Sprites organization inventory",
+        "another page without a continuation token",
       ),
   );
-  assertIsError(error.cause);
   assertStringIncludes(
-    error.cause.message,
+    error.message,
     "another page without a continuation token",
   );
   assertEquals(calls.length, 1);
@@ -231,12 +218,7 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
     Error,
   );
 
-  assertStringIncludes(
-    error.message,
-    "Could not read Sprites organization inventory",
-  );
-  assertIsError(error.cause);
-  assertStringIncludes(error.cause.message, "HTTP 401");
+  assertStringIncludes(error.message, "HTTP 401");
   assertEquals(getWrittenResources(), []);
 });
 
@@ -248,7 +230,7 @@ Deno.test("lookup rejects an incomplete API page", async () => {
   const error = await assertRejects(
     () =>
       withMockedFetch(
-        [response({ name: "acme" })],
+        () => response({ name: "acme" }),
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
@@ -258,8 +240,7 @@ Deno.test("lookup rejects an incomplete API page", async () => {
     Error,
   );
 
-  assertIsError(error.cause);
-  assertStringIncludes(error.cause.message, "unexpected list response");
+  assertStringIncludes(error.message, "invalid JSON response for its schema");
   assertEquals(getWrittenResources(), []);
 });
 
@@ -290,8 +271,7 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
     Error,
   );
 
-  assertIsError(error.cause);
-  assertStringIncludes(error.cause.message, "repeated a continuation token");
+  assertStringIncludes(error.message, "repeated a continuation token");
   assertEquals(getWrittenResources(), []);
 });
 
@@ -400,8 +380,7 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
     Error,
   );
 
-  assertIsError(error.cause);
-  assertStringIncludes(error.cause.message, "HTTP 503");
+  assertStringIncludes(error.message, "HTTP 503");
   assertEquals(requests, 3);
   assertEquals(getWrittenResources(), []);
 });
@@ -436,8 +415,7 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
     Error,
   );
 
-  assertIsError(error.cause);
-  assertStringIncludes(error.cause.message, "longer than timeoutMs");
+  assertStringIncludes(error.message, "longer than timeoutMs");
   assertEquals(requests, 1);
   assertEquals(getWrittenResources(), []);
 });
@@ -467,11 +445,10 @@ Deno.test("lookup honors parent cancellation without retrying", async () => {
             { ...context, deleteResource: async () => {}, globalArgs },
           ),
       ),
-    Error,
+    DOMException,
   );
 
-  assertIsError(error.cause);
-  assertStringIncludes(error.cause.message, "request failed");
+  assertEquals(error.name, "AbortError");
   assertEquals(requests, 1);
   assertEquals(getWrittenResources(), []);
 });
@@ -503,9 +480,7 @@ Deno.test("inventory enforces one aggregate byte budget across all pages without
         deleteResource: async () => {},
         globalArgs: limited,
       })), Error);
-  assertIsError(error.cause);
-  assertIsError(error.cause.cause);
-  assertStringIncludes(error.cause.cause.message, "maxResponseBytes");
+  assertStringIncludes(error.message, "maxResponseBytes");
   assertEquals(requests, 2);
   assertEquals(test.getWrittenResources(), []);
 });
