@@ -49,7 +49,8 @@ export const ConnectionSchema = z.object({
   access_policy: AccessPolicySchema.optional(),
   provider_info: z.record(z.string(), z.json()).optional(),
   user_id: z.string().nullish(),
-  token_expires_at: z.iso.datetime({ offset: true }).nullish(),
+  token_expires_at: z.iso.datetime({ offset: true }).meta({ sensitive: false })
+    .nullish(),
   inserted_at: z.iso.datetime({ offset: true }).optional(),
   updated_at: z.iso.datetime({ offset: true }).optional(),
   usage_snippet: z.string().optional(),

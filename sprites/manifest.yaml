@@ -2,17 +2,19 @@ manifestVersion: 1
 name: "@josh/sprites"
 version: "2026.09.11.1"
 repository: https://github.com/joshuadavidthomas/swamp-extensions
+paths:
+  base: manifest
+
 description: |
   Swamp models for [Fly.io Sprites](https://sprites.dev). Run commands, read and
   write files, manage services and checkpoints, and control network access.
 
   ## Installation
 
-  This package is unpublished. Install Swamp and clone this repository, then run
-  this command from your own Swamp repository:
+  Install the extension in your Swamp repository:
 
   ```sh
-  swamp extension source add /path/to/sprite-swamp/sprites
+  swamp extension pull @josh/sprites
   ```
 
   ## Usage
@@ -155,20 +157,20 @@ description: |
   change, run `listSprites` and verify the target names and IDs.
 
   Each method saves its summary under the method name. Per-Sprite results use
-  `<method>-<sprite>`, or `<method>-<service_name>-<sprite>` for service methods.
-  Organization `exec` saves `exec-stdout-<sprite>` and `exec-stderr-<sprite>`. It
-  records nonzero exits rather than failing the whole run.
+  `<method>-<sprite-id>`, including service methods. Service results also store
+  `serviceName`. Organization `exec` saves `execStdout-<sprite-id>` and
+  `execStderr-<sprite-id>`. It records nonzero exits rather than failing the whole run.
 
   Each command gets the organization model's `timeoutMs`, which defaults to 30
   seconds. Raise it for slow commands; it limits each command, not the full run.
 
 models:
-  - checkpoint.ts
-  - connector.ts
-  - organization.ts
-  - service.ts
-  - sprite.ts
-  - task.ts
+  - extensions/models/checkpoint.ts
+  - extensions/models/connector.ts
+  - extensions/models/organization.ts
+  - extensions/models/service.ts
+  - extensions/models/sprite.ts
+  - extensions/models/task.ts
 
 additionalFiles:
   - LICENSE.md

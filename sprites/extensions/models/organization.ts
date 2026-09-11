@@ -74,12 +74,15 @@ const checkpointExtra = z.object({
   checkpoint: Checkpoint.nullable().optional(),
 });
 const serviceExtra = z.object({
+  serviceName: z.string(),
   exitCode: z.number().int().nullable().optional(),
   service: Service.nullable().optional(),
 });
 const serviceExitExtra = z.object({
+  serviceName: z.string(),
   exitCode: z.number().int().nullable().optional(),
 });
+const serviceDeleteExtra = z.object({ serviceName: z.string() });
 
 const execExtra = z.object({
   exitCode: z.number().int().nullable(),
@@ -107,7 +110,7 @@ export const model = {
     ),
     spriteSetNetworkPolicy: resource(
       recordSchema(network),
-      "One Sprite's outcome of setNetworkPolicy; instance name setNetworkPolicy-<sprite>",
+      "One Sprite's outcome of setNetworkPolicy; instance name setNetworkPolicy-<sprite-id>",
     ),
     setPrivilegesPolicy: resource(
       summarySchema(privileges),
@@ -115,7 +118,7 @@ export const model = {
     ),
     spriteSetPrivilegesPolicy: resource(
       recordSchema(privileges),
-      "One Sprite's outcome of setPrivilegesPolicy; instance name setPrivilegesPolicy-<sprite>",
+      "One Sprite's outcome of setPrivilegesPolicy; instance name setPrivilegesPolicy-<sprite-id>",
     ),
     setResourcesPolicy: resource(
       summarySchema(resources),
@@ -123,7 +126,7 @@ export const model = {
     ),
     spriteSetResourcesPolicy: resource(
       recordSchema(resources),
-      "One Sprite's outcome of setResourcesPolicy; instance name setResourcesPolicy-<sprite>",
+      "One Sprite's outcome of setResourcesPolicy; instance name setResourcesPolicy-<sprite-id>",
     ),
     deletePrivilegesPolicy: resource(
       summarySchema(emptyExtra),
@@ -131,7 +134,7 @@ export const model = {
     ),
     spriteDeletePrivilegesPolicy: resource(
       recordSchema(emptyExtra),
-      "One Sprite's outcome of deletePrivilegesPolicy; instance name deletePrivilegesPolicy-<sprite>",
+      "One Sprite's outcome of deletePrivilegesPolicy; instance name deletePrivilegesPolicy-<sprite-id>",
     ),
     deleteResourcesPolicy: resource(
       summarySchema(emptyExtra),
@@ -139,7 +142,7 @@ export const model = {
     ),
     spriteDeleteResourcesPolicy: resource(
       recordSchema(emptyExtra),
-      "One Sprite's outcome of deleteResourcesPolicy; instance name deleteResourcesPolicy-<sprite>",
+      "One Sprite's outcome of deleteResourcesPolicy; instance name deleteResourcesPolicy-<sprite-id>",
     ),
     getNetworkPolicy: resource(
       summarySchema(network),
@@ -147,7 +150,7 @@ export const model = {
     ),
     spriteGetNetworkPolicy: resource(
       recordSchema(network),
-      "One Sprite's outcome of getNetworkPolicy; instance name getNetworkPolicy-<sprite>",
+      "One Sprite's outcome of getNetworkPolicy; instance name getNetworkPolicy-<sprite-id>",
     ),
     getPrivilegesPolicy: resource(
       summarySchema(privileges),
@@ -155,7 +158,7 @@ export const model = {
     ),
     spriteGetPrivilegesPolicy: resource(
       recordSchema(privileges),
-      "One Sprite's outcome of getPrivilegesPolicy; instance name getPrivilegesPolicy-<sprite>",
+      "One Sprite's outcome of getPrivilegesPolicy; instance name getPrivilegesPolicy-<sprite-id>",
     ),
     getResourcesPolicy: resource(
       summarySchema(resources),
@@ -163,7 +166,7 @@ export const model = {
     ),
     spriteGetResourcesPolicy: resource(
       recordSchema(resources),
-      "One Sprite's outcome of getResourcesPolicy; instance name getResourcesPolicy-<sprite>",
+      "One Sprite's outcome of getResourcesPolicy; instance name getResourcesPolicy-<sprite-id>",
     ),
     upgrade: resource(
       summarySchema(upgradeExtra),
@@ -171,7 +174,7 @@ export const model = {
     ),
     spriteUpgrade: resource(
       recordSchema(upgradeExtra),
-      "One Sprite's outcome of upgrade; instance name upgrade-<sprite>",
+      "One Sprite's outcome of upgrade; instance name upgrade-<sprite-id>",
     ),
     restart: resource(
       summarySchema(emptyExtra),
@@ -179,7 +182,7 @@ export const model = {
     ),
     spriteRestart: resource(
       recordSchema(emptyExtra),
-      "One Sprite's outcome of restart; instance name restart-<sprite>",
+      "One Sprite's outcome of restart; instance name restart-<sprite-id>",
     ),
     createCheckpoint: resource(
       summarySchema(checkpointExtra),
@@ -187,7 +190,7 @@ export const model = {
     ),
     spriteCreateCheckpoint: resource(
       recordSchema(checkpointExtra),
-      "One Sprite's outcome of createCheckpoint; instance name createCheckpoint-<sprite>",
+      "One Sprite's outcome of createCheckpoint; instance name createCheckpoint-<sprite-id>",
     ),
     putService: resource(
       summarySchema(serviceExtra),
@@ -195,7 +198,7 @@ export const model = {
     ),
     spritePutService: resource(
       recordSchema(serviceExtra),
-      "One Sprite's outcome of putService; instance name putService-<service_name>-<sprite>",
+      "One Sprite's outcome of putService; instance name putService-<sprite-id>",
     ),
     startService: resource(
       summarySchema(serviceExitExtra),
@@ -203,7 +206,7 @@ export const model = {
     ),
     spriteStartService: resource(
       recordSchema(serviceExitExtra),
-      "One Sprite's outcome of startService; instance name startService-<service_name>-<sprite>",
+      "One Sprite's outcome of startService; instance name startService-<sprite-id>",
     ),
     stopService: resource(
       summarySchema(serviceExitExtra),
@@ -211,7 +214,7 @@ export const model = {
     ),
     spriteStopService: resource(
       recordSchema(serviceExitExtra),
-      "One Sprite's outcome of stopService; instance name stopService-<service_name>-<sprite>",
+      "One Sprite's outcome of stopService; instance name stopService-<sprite-id>",
     ),
     restartService: resource(
       summarySchema(serviceExitExtra),
@@ -219,15 +222,15 @@ export const model = {
     ),
     spriteRestartService: resource(
       recordSchema(serviceExitExtra),
-      "One Sprite's outcome of restartService; instance name restartService-<service_name>-<sprite>",
+      "One Sprite's outcome of restartService; instance name restartService-<sprite-id>",
     ),
     deleteService: resource(
-      summarySchema(emptyExtra),
+      summarySchema(serviceDeleteExtra),
       "Last deleteService run: which Sprites it matched, applied to, and failed on",
     ),
     spriteDeleteService: resource(
-      recordSchema(emptyExtra),
-      "One Sprite's outcome of deleteService; instance name deleteService-<service_name>-<sprite>",
+      recordSchema(serviceDeleteExtra),
+      "One Sprite's outcome of deleteService; instance name deleteService-<sprite-id>",
     ),
     exec: resource(
       ExecSummary,
@@ -235,7 +238,7 @@ export const model = {
     ),
     spriteExec: resource(
       recordSchema(execExtra),
-      "One Sprite's outcome of exec; instance name exec-<sprite>",
+      "One Sprite's outcome of exec; instance name exec-<sprite-id>",
     ),
     listSprites: resource(
       InventorySchema,
@@ -249,7 +252,7 @@ export const model = {
 export function createMethods(execute: ManagementExec = executeHttp) {
   return {
     exec: method(
-      "Run one command on every Sprite the selector matches over HTTP exec; a nonzero exit is recorded, not failed; stdout and stderr are saved per Sprite as exec-stdout-<sprite> and exec-stderr-<sprite>",
+      "Run one command on every Sprite the selector matches over HTTP exec; a nonzero exit is recorded, not failed; stdout and stderr are saved per Sprite as execStdout-<sprite-id> and execStderr-<sprite-id>",
       CommandArgs.omit({ failOnNonZero: true }).extend({
         select: SpriteSelector,
       }),
@@ -273,11 +276,11 @@ export function createMethods(execute: ManagementExec = executeHttp) {
             context.signal.throwIfAborted();
             const stdout = await context.createFileWriter(
               "spriteExecStdout",
-              `exec-stdout-${sprite.name}`,
+              `execStdout-${sprite.id}`,
             ).writeAll(result.stdout);
             const stderr = await context.createFileWriter(
               "spriteExecStderr",
-              `exec-stderr-${sprite.name}`,
+              `execStderr-${sprite.id}`,
             ).writeAll(result.stderr);
             return {
               handles: [stdout, stderr],
@@ -332,7 +335,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
       },
     ),
     setNetworkPolicy: method(
-      "Replace the network policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setNetworkPolicy-<sprite>",
+      "Replace the network policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setNetworkPolicy-<sprite-id>",
       z.object({ select: SpriteSelector, policy: NetworkPolicy }),
       "setNetworkPolicy",
       summarySchema(network),
@@ -355,7 +358,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     setPrivilegesPolicy: method(
-      "Set the privileges policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setPrivilegesPolicy-<sprite>",
+      "Set the privileges policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setPrivilegesPolicy-<sprite-id>",
       z.object({ select: SpriteSelector, policy: PrivilegesPolicy }),
       "setPrivilegesPolicy",
       summarySchema(privileges),
@@ -378,7 +381,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     setResourcesPolicy: method(
-      "Set the resources policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setResourcesPolicy-<sprite>",
+      "Set the resources policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setResourcesPolicy-<sprite-id>",
       z.object({ select: SpriteSelector, policy: ResourcesPolicy }),
       "setResourcesPolicy",
       summarySchema(resources),
@@ -401,7 +404,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     deletePrivilegesPolicy: method(
-      "Remove the privileges policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as deletePrivilegesPolicy-<sprite>",
+      "Remove the privileges policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as deletePrivilegesPolicy-<sprite-id>",
       z.object({ select: SpriteSelector }),
       "deletePrivilegesPolicy",
       summarySchema(emptyExtra),
@@ -423,7 +426,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     deleteResourcesPolicy: method(
-      "Remove the resources policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as deleteResourcesPolicy-<sprite>",
+      "Remove the resources policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as deleteResourcesPolicy-<sprite-id>",
       z.object({ select: SpriteSelector }),
       "deleteResourcesPolicy",
       summarySchema(emptyExtra),
@@ -445,7 +448,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     getNetworkPolicy: method(
-      "Read the network policy from every Sprite the selector matches; each Sprite's outcome is also saved as getNetworkPolicy-<sprite>",
+      "Read the network policy from every Sprite the selector matches; each Sprite's outcome is also saved as getNetworkPolicy-<sprite-id>",
       z.object({ select: SpriteSelector }),
       "getNetworkPolicy",
       summarySchema(network),
@@ -468,7 +471,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     getPrivilegesPolicy: method(
-      "Read the privileges policy from every Sprite the selector matches; each Sprite's outcome is also saved as getPrivilegesPolicy-<sprite>",
+      "Read the privileges policy from every Sprite the selector matches; each Sprite's outcome is also saved as getPrivilegesPolicy-<sprite-id>",
       z.object({ select: SpriteSelector }),
       "getPrivilegesPolicy",
       summarySchema(privileges),
@@ -491,7 +494,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     getResourcesPolicy: method(
-      "Read the resources policy from every Sprite the selector matches; each Sprite's outcome is also saved as getResourcesPolicy-<sprite>",
+      "Read the resources policy from every Sprite the selector matches; each Sprite's outcome is also saved as getResourcesPolicy-<sprite-id>",
       z.object({ select: SpriteSelector }),
       "getResourcesPolicy",
       summarySchema(resources),
@@ -515,7 +518,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     ),
     // Not in either API reference; verified live.
     upgrade: method(
-      "Request a runtime upgrade on every Sprite the selector matches; success only records provider acceptance",
+      "Request a runtime upgrade on every Sprite the selector matches; success only records provider acceptance; each Sprite's outcome is also saved as upgrade-<sprite-id>",
       z.object({ select: SpriteSelector, version: z.string().optional() }),
       "upgrade",
       summarySchema(upgradeExtra),
@@ -539,7 +542,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     ),
     // Not in either API reference; verified live.
     restart: method(
-      "Request a restart on every Sprite the selector matches; success only records provider acceptance",
+      "Request a restart on every Sprite the selector matches; success only records provider acceptance; each Sprite's outcome is also saved as restart-<sprite-id>",
       z.object({ select: SpriteSelector }),
       "restart",
       summarySchema(emptyExtra),
@@ -561,7 +564,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     createCheckpoint: method(
-      "Take a checkpoint on every Sprite the selector matches; each Sprite's outcome is also saved as createCheckpoint-<sprite>",
+      "Take a checkpoint on every Sprite the selector matches; each Sprite's outcome is also saved as createCheckpoint-<sprite-id>",
       z.object({ select: SpriteSelector, comment: z.string().optional() }),
       "createCheckpoint",
       summarySchema(checkpointExtra),
@@ -607,7 +610,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         ),
     ),
     putService: method(
-      "Create or update the named service on every Sprite the selector matches; each Sprite's outcome is also saved as putService-<service_name>-<sprite>",
+      "Create or update the named service on every Sprite the selector matches; each Sprite's outcome is also saved as putService-<sprite-id>",
       z.object({
         select: SpriteSelector,
         service_name: z.string().min(1),
@@ -628,7 +631,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
           context,
           args.select,
           "spritePutService",
-          `putService-${args.service_name}`,
+          "putService",
           serviceExtra,
           async (sprite) => {
             const path = spritePath(
@@ -650,10 +653,11 @@ export function createMethods(execute: ManagementExec = executeHttp) {
             const service = await jsonRequest(context, "GET", path, Service);
             return { exitCode: null, service };
           },
+          { serviceName: args.service_name },
         ),
     ),
     startService: method(
-      "Start the named service on every Sprite the selector matches; each Sprite's outcome is also saved as startService-<service_name>-<sprite>",
+      "Start the named service on every Sprite the selector matches; each Sprite's outcome is also saved as startService-<sprite-id>",
       z.object({
         select: SpriteSelector,
         service_name: z.string().min(1),
@@ -666,7 +670,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
           context,
           args.select,
           "spriteStartService",
-          `startService-${args.service_name}`,
+          "startService",
           serviceExitExtra,
           async (sprite) => {
             const path = spritePath(
@@ -690,10 +694,11 @@ export function createMethods(execute: ManagementExec = executeHttp) {
             await jsonRequest(context, "GET", path, Service);
             return { exitCode: null };
           },
+          { serviceName: args.service_name },
         ),
     ),
     stopService: method(
-      "Stop the named service on every Sprite the selector matches; each Sprite's outcome is also saved as stopService-<service_name>-<sprite>",
+      "Stop the named service on every Sprite the selector matches; each Sprite's outcome is also saved as stopService-<sprite-id>",
       z.object({
         select: SpriteSelector,
         service_name: z.string().min(1),
@@ -706,7 +711,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
           context,
           args.select,
           "spriteStopService",
-          `stopService-${args.service_name}`,
+          "stopService",
           serviceExitExtra,
           async (sprite) => {
             const path = spritePath(
@@ -727,10 +732,11 @@ export function createMethods(execute: ManagementExec = executeHttp) {
               exitCode: stopped?.exit_code ?? null,
             };
           },
+          { serviceName: args.service_name },
         ),
     ),
     restartService: method(
-      "Restart the named service on every Sprite the selector matches; each Sprite's outcome is also saved as restartService-<service_name>-<sprite>",
+      "Restart the named service on every Sprite the selector matches; each Sprite's outcome is also saved as restartService-<sprite-id>",
       z.object({
         select: SpriteSelector,
         service_name: z.string().min(1),
@@ -743,7 +749,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
           context,
           args.select,
           "spriteRestartService",
-          `restartService-${args.service_name}`,
+          "restartService",
           serviceExitExtra,
           async (sprite) => {
             const path = spritePath(
@@ -767,20 +773,21 @@ export function createMethods(execute: ManagementExec = executeHttp) {
             await jsonRequest(context, "GET", path, Service);
             return { exitCode: null };
           },
+          { serviceName: args.service_name },
         ),
     ),
     deleteService: method(
-      "Delete the named service on every Sprite the selector matches; each Sprite's outcome is also saved as deleteService-<service_name>-<sprite>",
+      "Delete the named service on every Sprite the selector matches; each Sprite's outcome is also saved as deleteService-<sprite-id>",
       z.object({ select: SpriteSelector, service_name: z.string().min(1) }),
       "deleteService",
-      summarySchema(emptyExtra),
+      summarySchema(serviceDeleteExtra),
       (args, context: Context) =>
         fanOut(
           context,
           args.select,
           "spriteDeleteService",
-          `deleteService-${args.service_name}`,
-          emptyExtra,
+          "deleteService",
+          serviceDeleteExtra,
           async (sprite) => {
             const path = spritePath(
               sprite.name,
@@ -796,6 +803,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
             }
             return {};
           },
+          { serviceName: args.service_name },
         ),
     ),
     ...connectorsMethods,

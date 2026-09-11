@@ -22,7 +22,7 @@ import { connectExecProxy } from "./proxy.ts";
 
 const GATEWAY_HOST = "api.sprites.dev";
 const GATEWAY_PORT = 443;
-const HTTP_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HTTP_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
 const GatewayConnection = z.looseObject({
   provider: z.string().optional(),
@@ -46,7 +46,7 @@ const GatewayList = z.object({
   ),
 });
 
-const ProviderMethod = z.string().regex(HTTP_TOKEN).refine(
+const ProviderMethod = z.string().regex(HTTP_NAME_PATTERN).refine(
   (value) => value.toUpperCase() !== "CONNECT",
   "CONNECT establishes a tunnel; use proxy instead of the HTTP relay.",
 );
@@ -128,7 +128,7 @@ function checkedHeaders(
         `Gateway request header ${name} is controlled by the gateway transport.`,
       );
     }
-    if (!HTTP_TOKEN.test(name) || /[\r\n]/.test(value)) {
+    if (!HTTP_NAME_PATTERN.test(name) || /[\r\n]/.test(value)) {
       throw new Error("Gateway request contains an invalid HTTP header.");
     }
   }
@@ -366,7 +366,10 @@ export const gatewayMethods = {
     z.object({}),
     "gatewayList",
     GatewayList,
-    (_args, ctx: SpriteContext) => discoverGateway(ctx),
+    async (_args, ctx: SpriteContext) => {
+      await verifySprite(ctx);
+      return discoverGateway(ctx);
+    },
   ),
   gatewayRequest: method(
     "Relay one provider path through a configured Sprite connector",
@@ -377,11 +380,12 @@ export const gatewayMethods = {
       await verifySprite(ctx);
       const response = await relayGateway(ctx, args);
       ctx.signal.throwIfAborted();
+      const { body, ...metadata } = response;
       const bodyHandle = await ctx.createFileWriter(
         "gatewayRequestBody",
         "gatewayRequestBody",
-      ).writeAll(response.body);
-      return withHandles(response, [bodyHandle]);
+      ).writeAll(body);
+      return withHandles(metadata, [bodyHandle]);
     },
   ),
 };

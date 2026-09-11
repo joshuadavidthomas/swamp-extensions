@@ -36,10 +36,10 @@ export function inputBytes(
 
 /** Credentials and transport limits shared by organization-scoped models. */
 export const AuthSchema = z.object({
-  token: z.string().min(1).regex(
+  token: z.string().meta({ sensitive: true }).min(1).regex(
     /^[\x21-\x7e]+$/,
     "Use a bearer token without spaces or control characters.",
-  ).meta({ sensitive: true }).describe(
+  ).describe(
     "Organization token; use a vault reference.",
   ),
   baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })

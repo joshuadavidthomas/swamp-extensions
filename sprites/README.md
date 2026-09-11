@@ -4,10 +4,10 @@
 
 ## Installation
 
-This package is unpublished. Install Swamp and clone this repository, then run this command from your own Swamp repository:
+Install the extension in your Swamp repository:
 
 ```sh
-swamp extension source add /path/to/sprite-swamp/sprites
+swamp extension pull @josh/sprites
 ```
 
 ## Usage
@@ -118,7 +118,7 @@ Connector policy updates replace the whole policy. Provisioning a connection alo
 
 Organization methods that act on multiple Sprites select them by prefix or labels when called. They process one Sprite at a time and continue after recording a failure. They use the current inventory without checking IDs saved by individual Sprite models. Before a bulk restart, service deletion, or policy change, run `listSprites` and verify the target names and IDs.
 
-Each method saves its summary under the method name. Per-Sprite results use `<method>-<sprite>`, or `<method>-<service_name>-<sprite>` for service methods. Organization `exec` saves `exec-stdout-<sprite>` and `exec-stderr-<sprite>`. It records nonzero exits rather than failing the whole run.
+Each method saves its summary under the method name. Per-Sprite results use `<method>-<sprite-id>`, including service methods. Service results also store `serviceName`. Organization `exec` saves `execStdout-<sprite-id>` and `execStderr-<sprite-id>`. It records nonzero exits rather than failing the whole run.
 
 Each command gets the organization model's `timeoutMs`, which defaults to 30 seconds. Raise it for slow commands; it limits each command, not the full run.
 

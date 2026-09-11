@@ -116,11 +116,12 @@ Deno.test("mutations require a saved identity before adopting an existing Sprite
   assertEquals(test.getWrittenResources(), []);
 });
 
-Deno.test("execution, attachment, and gateway mutations refuse a replaced Sprite", async () => {
+Deno.test("execution, attachment, and gateway methods refuse a replaced Sprite", async () => {
   const cases = [
     { name: "exec", args: { cmd: ["echo", "hello"] } },
     { name: "execHttp", args: { cmd: ["echo", "hello"] } },
     { name: "attach", args: { session_id: "7" } },
+    { name: "gatewayList", args: {} },
     {
       name: "gatewayRequest",
       args: {

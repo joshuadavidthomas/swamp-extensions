@@ -539,8 +539,8 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
   ]);
   assertEquals(bodies, [getNetworkPolicy, getNetworkPolicy]);
   assertEquals(result.dataHandles.map((handle) => handle.name), [
-    "setNetworkPolicy-worker-1",
-    "setNetworkPolicy-worker-2",
+    "setNetworkPolicy-sprite-1",
+    "setNetworkPolicy-sprite-2",
     "setNetworkPolicy",
   ]);
   const writes = context.getWrittenResources();
@@ -562,7 +562,7 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
   assertEquals(typeof writes[2].data.observedAt, "string");
   for (const [offset, index] of [1, 2].entries()) {
     assertEquals(writes[offset].specName, "spriteSetNetworkPolicy");
-    assertEquals(writes[offset].name, `setNetworkPolicy-worker-${index}`);
+    assertEquals(writes[offset].name, `setNetworkPolicy-sprite-${index}`);
     assertEquals(writes[offset].data, {
       name: `worker-${index}`,
       id: `sprite-${index}`,
@@ -655,7 +655,7 @@ Deno.test("setNetworkPolicy all omits prefix and records a failure without retry
   ]);
   const failed = context.getWrittenResources()[1];
   assertEquals(failed.specName, "spriteSetNetworkPolicy");
-  assertEquals(failed.name, "setNetworkPolicy-worker-2");
+  assertEquals(failed.name, "setNetworkPolicy-sprite-2");
   assertEquals(failed.data, {
     name: "worker-2",
     id: "sprite-2",
@@ -727,7 +727,7 @@ Deno.test("setNetworkPolicy parent cancellation mid-rollout preserves completed 
   const writes = context.getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "spriteSetNetworkPolicy");
-  assertEquals(writes[0].name, "setNetworkPolicy-worker-1");
+  assertEquals(writes[0].name, "setNetworkPolicy-sprite-1");
   assertEquals(writes[0].data, {
     name: "worker-1",
     id: "sprite-1",
@@ -767,7 +767,7 @@ Deno.test("setPrivilegesPolicy posts the policy and records the rollout and Spri
   );
   assertEquals(bodies, [policy]);
   assertEquals(result.dataHandles.map((handle) => handle.name), [
-    "setPrivilegesPolicy-worker-1",
+    "setPrivilegesPolicy-sprite-1",
     "setPrivilegesPolicy",
   ]);
   const writes = context.getWrittenResources();
@@ -792,7 +792,7 @@ Deno.test("setPrivilegesPolicy posts the policy and records the rollout and Spri
     observedAt: summary.observedAt,
   });
   assertEquals(writes[0].specName, "spriteSetPrivilegesPolicy");
-  assertEquals(writes[0].name, "setPrivilegesPolicy-worker-1");
+  assertEquals(writes[0].name, "setPrivilegesPolicy-sprite-1");
   assertEquals(writes[0].data, {
     name: "worker-1",
     id: "sprite-1",
@@ -827,7 +827,7 @@ Deno.test("setResourcesPolicy posts the policy and records the rollout and Sprit
   );
   assertEquals(bodies, [policy]);
   assertEquals(result.dataHandles.map((handle) => handle.name), [
-    "setResourcesPolicy-worker-1",
+    "setResourcesPolicy-sprite-1",
     "setResourcesPolicy",
   ]);
   const writes = context.getWrittenResources();
@@ -852,7 +852,7 @@ Deno.test("setResourcesPolicy posts the policy and records the rollout and Sprit
     observedAt: summary.observedAt,
   });
   assertEquals(writes[0].specName, "spriteSetResourcesPolicy");
-  assertEquals(writes[0].name, "setResourcesPolicy-worker-1");
+  assertEquals(writes[0].name, "setResourcesPolicy-sprite-1");
   assertEquals(writes[0].data, {
     name: "worker-1",
     id: "sprite-1",
@@ -913,7 +913,7 @@ Deno.test("deletePrivilegesPolicy removes policies in order and records an absen
   });
   for (const [index, result] of results.entries()) {
     assertEquals(writes[index].specName, "spriteDeletePrivilegesPolicy");
-    assertEquals(writes[index].name, `deletePrivilegesPolicy-${result.name}`);
+    assertEquals(writes[index].name, `deletePrivilegesPolicy-${result.id}`);
     assertEquals(writes[index].data, {
       ...result,
       observedAt: summary.observedAt,
@@ -946,7 +946,7 @@ Deno.test("deleteResourcesPolicy uses the resources route and record names", asy
     [
       {
         specName: "spriteDeleteResourcesPolicy",
-        name: "deleteResourcesPolicy-worker-1",
+        name: "deleteResourcesPolicy-sprite-1",
       },
       { specName: "deleteResourcesPolicy", name: "deleteResourcesPolicy" },
     ],
@@ -997,8 +997,8 @@ Deno.test("getNetworkPolicy reads each current policy into the summary and metho
     "/v1/sprites/worker-2/policy/network",
   ]);
   assertEquals(result.dataHandles.map((handle) => handle.name), [
-    "getNetworkPolicy-worker-1",
-    "getNetworkPolicy-worker-2",
+    "getNetworkPolicy-sprite-1",
+    "getNetworkPolicy-sprite-2",
     "getNetworkPolicy",
   ]);
   const writes = context.getWrittenResources();
@@ -1020,7 +1020,7 @@ Deno.test("getNetworkPolicy reads each current policy into the summary and metho
   });
   for (const [index, row] of results.entries()) {
     assertEquals(writes[index].specName, "spriteGetNetworkPolicy");
-    assertEquals(writes[index].name, `getNetworkPolicy-worker-${index + 1}`);
+    assertEquals(writes[index].name, `getNetworkPolicy-sprite-${index + 1}`);
     assertEquals(writes[index].data, { ...row, observedAt: audit.observedAt });
   }
 });
@@ -1056,8 +1056,8 @@ Deno.test("upgrade posts with and without a version and records provider accepta
       [1, 2].map(() => version ? JSON.stringify({ version }) : ""),
     );
     assertEquals(result.dataHandles.map((handle) => handle.name), [
-      "upgrade-worker-1",
-      "upgrade-worker-2",
+      "upgrade-sprite-1",
+      "upgrade-sprite-2",
       "upgrade",
     ]);
     const writes = context.getWrittenResources();
@@ -1106,8 +1106,8 @@ Deno.test("restart posts without a body and saves each outcome and summary", asy
     "/v1/sprites/worker-2/restart",
   ]);
   assertEquals(result.dataHandles.map((handle) => handle.name), [
-    "restart-worker-1",
-    "restart-worker-2",
+    "restart-sprite-1",
+    "restart-sprite-2",
     "restart",
   ]);
   const writes = context.getWrittenResources();
@@ -1218,14 +1218,14 @@ Deno.test("createCheckpoint saves the newest checkpoint and continues after an e
       observedAt: summary.observedAt,
     });
     assertEquals(result.dataHandles.map((h) => h.name), [
-      "createCheckpoint-worker-1",
-      "createCheckpoint-worker-2",
-      "createCheckpoint-worker-3",
+      "createCheckpoint-sprite-1",
+      "createCheckpoint-sprite-2",
+      "createCheckpoint-sprite-3",
       "createCheckpoint",
     ]);
     for (const [i, row] of results.entries()) {
       assertEquals(writes[i].specName, "spriteCreateCheckpoint");
-      assertEquals(writes[i].name, `createCheckpoint-worker-${i + 1}`);
+      assertEquals(writes[i].name, `createCheckpoint-sprite-${i + 1}`);
       assertEquals(writes[i].data, { ...row, observedAt: summary.observedAt });
     }
   }
@@ -1334,6 +1334,7 @@ for (const action of ["put", "start", "stop", "restart", "delete"] as const) {
     const results = [1, 2].map((i) => ({
       name: `worker-${i}`,
       id: `sprite-${i}`,
+      serviceName: "web/api",
       status: "applied",
       ...(action === "delete"
         ? {}
@@ -1351,17 +1352,74 @@ for (const action of ["put", "start", "stop", "restart", "delete"] as const) {
       observedAt: summary.observedAt,
     });
     assertEquals(result.dataHandles.map((h) => h.name), [
-      `${methodName}-web/api-worker-1`,
-      `${methodName}-web/api-worker-2`,
+      `${methodName}-sprite-1`,
+      `${methodName}-sprite-2`,
       methodName,
     ]);
     for (const [i, row] of results.entries()) {
       assertEquals(writes[i].specName, rowSpec);
-      assertEquals(writes[i].name, `${methodName}-web/api-worker-${i + 1}`);
+      assertEquals(writes[i].name, `${methodName}-sprite-${i + 1}`);
       assertEquals(writes[i].data, { ...row, observedAt: summary.observedAt });
     }
   });
 }
+
+Deno.test("putService names cannot collide across service and Sprite name boundaries", async () => {
+  const context = testContext(globalArgs);
+  await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [{ ...rolloutSprite(1), id: "sprite-id-1", name: "b-c" }],
+      }),
+      progress({ type: "complete", timestamp: 1 }),
+      response({ ...savedService, name: "a" }),
+    ],
+    () =>
+      model.methods.putService.execute({
+        select: { all: true },
+        service_name: "a",
+        service: { cmd: "server", args: [], needs: [] },
+      }, context),
+  );
+  await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [{ ...rolloutSprite(2), id: "sprite-id-2", name: "c" }],
+      }),
+      response({ error: "private provider output" }, 500),
+    ],
+    () =>
+      model.methods.putService.execute({
+        select: { all: true },
+        service_name: "a-b",
+        service: { cmd: "server", args: [], needs: [] },
+      }, context),
+  );
+
+  const writes = context.getWrittenResources();
+  assertEquals([writes[0].name, writes[2].name], [
+    "putService-sprite-id-1",
+    "putService-sprite-id-2",
+  ]);
+  assertEquals(writes[0].data.serviceName, "a");
+  assertEquals(writes[2].data, {
+    name: "c",
+    id: "sprite-id-2",
+    serviceName: "a-b",
+    status: "failed",
+    error: "HTTP 500",
+    observedAt: writes[2].data.observedAt,
+  });
+  assertEquals(writes[3].data.results, [{
+    name: "c",
+    id: "sprite-id-2",
+    serviceName: "a-b",
+    status: "failed",
+    error: "HTTP 500",
+  }]);
+});
 
 Deno.test("putService records a startup exit and still runs the third Sprite", async () => {
   const context = testContext(globalArgs);
@@ -1405,6 +1463,7 @@ Deno.test("putService records a startup exit and still runs the third Sprite", a
   const failed = {
     name: "worker-2",
     id: "sprite-2",
+    serviceName: "web",
     status: "failed",
     error: "exited during startup with code 17",
     exitCode: 17,
@@ -1412,7 +1471,7 @@ Deno.test("putService records a startup exit and still runs the third Sprite", a
   };
   assertEquals(summary.results[1], failed);
   assertEquals(writes[1].specName, "spritePutService");
-  assertEquals(writes[1].name, "putService-web-worker-2");
+  assertEquals(writes[1].name, "putService-sprite-2");
   assertEquals(writes[1].data, { ...failed, observedAt: summary.observedAt });
   assertEquals(summary.results[2].status, "applied");
 });
@@ -1504,9 +1563,9 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
     observedAt: summary.observedAt,
   });
   assertEquals(writes.map((w) => [w.specName, w.name]), [
-    ["spriteExec", "exec-worker-1"],
-    ["spriteExec", "exec-worker-2"],
-    ["spriteExec", "exec-worker-3"],
+    ["spriteExec", "exec-sprite-1"],
+    ["spriteExec", "exec-sprite-2"],
+    ["spriteExec", "exec-sprite-3"],
     ["exec", "exec"],
   ]);
   assertEquals(
@@ -1518,24 +1577,24 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
     [1, 2].flatMap((i) => [
       {
         spec: "spriteExecStdout",
-        name: `exec-stdout-worker-${i}`,
+        name: `execStdout-sprite-${i}`,
         bytes: new Uint8Array([0, 255]),
       },
       {
         spec: "spriteExecStderr",
-        name: `exec-stderr-worker-${i}`,
+        name: `execStderr-sprite-${i}`,
         bytes: new Uint8Array([10]),
       },
     ]),
   );
   assertEquals(result.dataHandles.map((h) => h.name), [
-    "exec-stdout-worker-1",
-    "exec-stderr-worker-1",
-    "exec-worker-1",
-    "exec-stdout-worker-2",
-    "exec-stderr-worker-2",
-    "exec-worker-2",
-    "exec-worker-3",
+    "execStdout-sprite-1",
+    "execStderr-sprite-1",
+    "exec-sprite-1",
+    "execStdout-sprite-2",
+    "execStderr-sprite-2",
+    "exec-sprite-2",
+    "exec-sprite-3",
     "exec",
   ]);
 });

@@ -24,7 +24,7 @@ export const LookupArgsSchema = z.object({
 const ApiPageSchema = z.object({
   sprites: z.array(SpriteResponse),
   has_more: z.boolean(),
-  next_continuation_token: z.string().nullish(),
+  next_continuation_token: z.string().meta({ sensitive: false }).nullish(),
   name: z.string(),
   running_limit: z.number().int().nonnegative().optional(),
   warm_limit: z.number().int().nonnegative().optional(),
@@ -196,11 +196,22 @@ export async function listAllSprites(
     page = await listSpritesPage(ctx, args, budget, token);
     sprites.push(...page.sprites);
   }
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const sprite of sprites) {
+    if (ids.has(sprite.id) || names.has(sprite.name)) {
+      throw new InvalidResponseError(
+        "Sprites API repeated a Sprite identity while listing the organization.",
+      );
+    }
+    ids.add(sprite.id);
+    names.add(sprite.name);
+  }
   return { organization, sprites };
 }
 
 /** Run sequentially in listing order, saving each outcome immediately. Parent cancellation rethrows. */
-export async function fanOut<E extends z.ZodObject>(
+export function fanOut<E extends z.ZodObject>(
   context: Context,
   select: z.output<typeof SpriteSelector>,
   spec: string,
@@ -209,6 +220,33 @@ export async function fanOut<E extends z.ZodObject>(
   operate: (
     sprite: Sprite,
   ) => Promise<z.input<E> & { failed?: string; handles?: Handle[] }>,
+): Promise<WithHandles<z.input<ReturnType<typeof summarySchema<E>>>>>;
+export function fanOut<
+  E extends z.ZodObject,
+  B extends Partial<z.input<E>>,
+>(
+  context: Context,
+  select: z.output<typeof SpriteSelector>,
+  spec: string,
+  recordPrefix: string,
+  extra: E,
+  operate: (
+    sprite: Sprite,
+  ) => Promise<
+    Omit<z.input<E>, keyof B> & { failed?: string; handles?: Handle[] }
+  >,
+  baseFields: B,
+): Promise<WithHandles<z.input<ReturnType<typeof summarySchema<E>>>>>;
+export async function fanOut<E extends z.ZodObject>(
+  context: Context,
+  select: z.output<typeof SpriteSelector>,
+  spec: string,
+  recordPrefix: string,
+  extra: E,
+  operate: (
+    sprite: Sprite,
+  ) => Promise<Partial<z.input<E>> & { failed?: string; handles?: Handle[] }>,
+  baseFields: Partial<z.input<E>> = {},
 ): Promise<WithHandles<z.input<ReturnType<typeof summarySchema<E>>>>> {
   const rowSchema = recordSchema(extra);
   const resultSchema = Outcome.extend(extra.shape);
@@ -235,6 +273,7 @@ export async function fanOut<E extends z.ZodObject>(
         name: sprite.name,
         id: sprite.id,
         ...extraFields,
+        ...baseFields,
         status: typeof failed === "string" ? "failed" : "applied",
         ...(typeof failed === "string" ? { error: failed } : {}),
       };
@@ -243,6 +282,7 @@ export async function fanOut<E extends z.ZodObject>(
       row = {
         name: sprite.name,
         id: sprite.id,
+        ...baseFields,
         status: "failed",
         error: error instanceof ApiError
           ? `HTTP ${error.status}`
@@ -253,7 +293,7 @@ export async function fanOut<E extends z.ZodObject>(
     handles.push(
       await context.writeResource(
         spec,
-        `${recordPrefix}-${sprite.name}`,
+        `${recordPrefix}-${sprite.id}`,
         rowSchema.parse({ ...row, observedAt }),
       ),
     );
