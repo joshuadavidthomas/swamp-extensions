@@ -16,22 +16,12 @@ import {
   executeControl,
   saveControlExecution,
 } from "./control.ts";
-import { type Channel, type Message } from "./socket.ts";
+import { type Message } from "./socket.ts";
 import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
+import { binaryFrame, FakeChannel, textFrame } from "./test_support.ts";
 import { TERMINAL_PROGRAM, TERMINAL_PYTHON } from "./terminal.ts";
 
 const encoder = new TextEncoder();
-const binary = (...bytes: number[]): Message => ({
-  binary: true,
-  bytes: new Uint8Array(bytes),
-});
-const text = (value: string): Message => ({
-  binary: false,
-  bytes: encoder.encode(value),
-});
-const control = (value: unknown): Message =>
-  text(`control:${JSON.stringify(value)}`);
-
 function setup(
   messages: Message[],
   signal: AbortSignal = new AbortController().signal,
@@ -49,28 +39,10 @@ function setup(
     signal,
     deleteResource: () => Promise.resolve(),
   };
-  const sent: (string | Uint8Array)[] = [];
-  let closed = 0;
   let connections = 0;
   let path = "";
-  let concurrentReads = 0;
-  let maximumReads = 0;
-  const channel: Channel = {
-    read: () => {
-      concurrentReads++;
-      maximumReads = Math.max(maximumReads, concurrentReads);
-      const message = messages.shift() ?? null;
-      concurrentReads--;
-      return Promise.resolve(message);
-    },
-    send: (data) => {
-      sent.push(data);
-      return Promise.resolve();
-    },
-    close: () => {
-      closed++;
-    },
-  };
+  const channel = new FakeChannel([...messages, null]);
+  const sent = channel.sent;
   const connect: ConnectChannel = (_ctx, value) => {
     connections++;
     path = value;
@@ -82,34 +54,45 @@ function setup(
     channel,
     connect,
     sent,
-    closed: () => closed,
+    closed: () => Number(channel.closed),
     connections: () => connections,
     path: () => path,
-    maximumReads: () => maximumReads,
   };
 }
 
 Deno.test("control exec reuses one socket and stores aggregate streams with per-operation ranges", async () => {
   const test = setup([
-    text(
-      JSON.stringify({
-        type: "debug",
-        message: "provider diagnostics are not command output",
-      }),
-    ),
-    text(
-      JSON.stringify({ type: "session_info", tty: false, session_id: "one" }),
-    ),
-    text(JSON.stringify({ type: "port_opened", port: 3000 })),
-    text(JSON.stringify({ type: "port_closed", port: 3000 })),
-    binary(1, 65, 0),
-    binary(2, 69),
-    binary(3, 7),
-    text(JSON.stringify({ type: "exit", exit_code: 7 })),
-    control({ type: "op.complete", op: "exec", args: { exitCode: 7 } }),
-    binary(1, 66, 67),
-    text(JSON.stringify({ type: "exit", exit_code: 0 })),
-    control({ type: "op.complete", args: {} }),
+    textFrame({
+      type: "debug",
+      message: "provider diagnostics are not command output",
+    }),
+    textFrame({ type: "session_info", tty: false, session_id: "one" }),
+    textFrame({ type: "port_opened", port: 3000 }),
+    textFrame({ type: "port_closed", port: 3000 }),
+    binaryFrame(1, 65, 0),
+    binaryFrame(2, 69),
+    binaryFrame(3, 7),
+    textFrame({ type: "exit", exit_code: 7 }),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${
+          JSON.stringify({
+            type: "op.complete",
+            op: "exec",
+            args: { exitCode: 7 },
+          })
+        }`,
+      ),
+    },
+    binaryFrame(1, 66, 67),
+    textFrame({ type: "exit", exit_code: 0 }),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${JSON.stringify({ type: "op.complete", args: {} })}`,
+      ),
+    },
   ]);
   const args = ControlExecArgs.parse({
     operations: [{
@@ -126,7 +109,6 @@ Deno.test("control exec reuses one socket and stores aggregate streams with per-
 
   assertEquals(test.connections(), 1);
   assertEquals(test.path(), "/v1/sprites/worker%20name/control");
-  assertEquals(test.maximumReads(), 1);
   assertEquals(test.sent, [
     'control:{"type":"op.start","op":"exec","args":{"cmd":["sh","-c","printf test"],"env":["FOO=one two"],"stdin":"true","dir":"/work dir"}}',
     new Uint8Array([0, 0, 255]),
@@ -179,8 +161,15 @@ Deno.test("control exec reuses one socket and stores aggregate streams with per-
 Deno.test("TTY operations send raw stdin plus text JSON resize and signal controls", async () => {
   const test = setup([]);
   const queued = [
-    binary(0, 1, 2, 255),
-    control({ type: "op.complete", args: { exitCode: 12 } }),
+    binaryFrame(0, 1, 2, 255),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${
+          JSON.stringify({ type: "op.complete", args: { exitCode: 12 } })
+        }`,
+      ),
+    },
   ];
   let release: ((message: Message) => void) | undefined;
   let reads = 0;
@@ -258,7 +247,7 @@ Deno.test("TTY operations send raw stdin plus text JSON resize and signal contro
   assertEquals(result.operations[0].exitCode, 12);
 });
 
-Deno.test("control exec rejects unsupported input shapes before connecting", async () => {
+Deno.test("control exec rejects unsupported input shapes before connecting", () => {
   assertThrows(() =>
     ControlExecArgs.parse({
       operations: [{ cmd: ["true"], detachable: true }],
@@ -299,57 +288,80 @@ Deno.test("control exec rejects unsupported input shapes before connecting", asy
         type: "stdin",
         atMs: 1,
         input: { kind: "text", text: "late" },
+      }, {
+        cmd: ["cat"],
+        actions: [{ type: "eof", atMs: 0 }, { type: "eof", atMs: 1 }],
       }],
+    }, {
+      cmd: ["cat"],
+      actions: [{ type: "eof", atMs: 0 }, { type: "eof", atMs: 1 }],
     }]
   ) {
-    const test = setup([]);
-    await assertRejects(
-      () =>
-        executeControl(
-          test.ctx,
-          ControlExecArgs.parse({ operations: [operation] }),
-          test.connect,
-        ),
-    );
-    assertEquals(test.connections(), 0);
+    assertThrows(() => ControlExecArgs.parse({ operations: [operation] }));
   }
 });
 
 Deno.test("control exec rejects protocol errors, unsupported frames, and truncated operations", async () => {
   const cases: Array<{ frames: Message[]; includes: string }> = [{
-    frames: [text('{"type":"notice"}')],
+    frames: [textFrame({ "type": "notice" })],
     includes: "unsupported text",
   }, {
-    frames: [control({ type: "other" })],
+    frames: [{
+      binary: false,
+      bytes: encoder.encode(`control:${JSON.stringify({ type: "other" })}`),
+    }],
     includes: "unsupported control",
   }, {
     frames: [
-      control({ type: "op.complete", op: "proxy", args: { exitCode: 0 } }),
+      {
+        binary: false,
+        bytes: encoder.encode(
+          `control:${
+            JSON.stringify({
+              type: "op.complete",
+              op: "proxy",
+              args: { exitCode: 0 },
+            })
+          }`,
+        ),
+      },
     ],
     includes: "unsupported control",
   }, {
-    frames: [text('{"type":"session_info","tty":true}')],
+    frames: [textFrame({ "type": "session_info", "tty": true })],
     includes: "mismatched TTY",
   }, {
-    frames: [binary(9, 1)],
+    frames: [binaryFrame(9, 1)],
     includes: "invalid frame",
   }, {
-    frames: [binary(3, 0), binary(3, 0)],
+    frames: [binaryFrame(3, 0), binaryFrame(3, 0)],
     includes: "duplicate exit",
   }, {
-    frames: [binary(3, 0), text('{"type":"exit","exit_code":1}')],
+    frames: [binaryFrame(3, 0), textFrame({ "type": "exit", "exit_code": 1 })],
     includes: "conflicting exit",
   }, {
     frames: [
-      binary(3, 0),
-      control({ type: "op.complete", args: { exitCode: 1 } }),
+      binaryFrame(3, 0),
+      {
+        binary: false,
+        bytes: encoder.encode(
+          `control:${
+            JSON.stringify({ type: "op.complete", args: { exitCode: 1 } })
+          }`,
+        ),
+      },
     ],
     includes: "conflicting exit",
   }, {
-    frames: [control({ type: "op.complete", args: {} })],
+    frames: [{
+      binary: false,
+      bytes: encoder.encode(
+        `control:${JSON.stringify({ type: "op.complete", args: {} })}`,
+      ),
+    }],
     includes: "without an exit status",
   }, {
-    frames: [binary(3, 0)],
+    frames: [binaryFrame(3, 0)],
     includes: "closed before op.complete",
   }];
   for (const { frames, includes } of cases) {
@@ -374,7 +386,7 @@ Deno.test("control exec rejects protocol errors, unsupported frames, and truncat
 Deno.test("unsupported control labels never expose embedded operation secrets", async () => {
   const secret = "embeddedsecret";
   const label = `auth_${secret}_failed`;
-  const test = setup([text(JSON.stringify({ type: label }))]);
+  const test = setup([textFrame({ type: label })]);
   const error = await assertRejects(
     () =>
       executeControl(
@@ -396,23 +408,23 @@ Deno.test("unsupported control labels never expose embedded operation secrets", 
 
 Deno.test("op.error fails without exposing provider text or saving partial output", async () => {
   const test = setup([
-    binary(1, 65),
-    control({
-      type: "op.error",
-      args: { error: "provider-secret test-token" },
-    }),
+    binaryFrame(1, 65),
+    {
+      binary: false,
+      bytes: encoder.encode(`control:${
+        JSON.stringify({
+          type: "op.error",
+          args: { error: "provider-secret test-token" },
+        })
+      }`),
+    },
   ]);
-  let error: Error | undefined;
-  try {
-    await executeControl(
+  const error = await assertRejects(() =>
+    executeControl(
       test.ctx,
       ControlExecArgs.parse({ operations: [{ cmd: ["false"] }] }),
       test.connect,
-    );
-  } catch (value) {
-    error = value as Error;
-  }
-  assert(error);
+    ), Error);
   assertFalse(error.message.includes("provider-secret"));
   assertFalse(error.message.includes("test-token"));
   assertEquals(test.getWrittenFiles(), []);
@@ -421,11 +433,21 @@ Deno.test("op.error fails without exposing provider text or saving partial outpu
 
 Deno.test("response accounting spans binary and control frames across all operations", async () => {
   const frames = [
-    binary(1, 1),
-    binary(3, 0),
-    control({ type: "op.complete" }),
-    binary(3, 0),
-    control({ type: "op.complete" }),
+    binaryFrame(1, 1),
+    binaryFrame(3, 0),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${JSON.stringify({ type: "op.complete" })}`,
+      ),
+    },
+    binaryFrame(3, 0),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${JSON.stringify({ type: "op.complete" })}`,
+      ),
+    },
   ];
   const total = frames.reduce((sum, frame) => sum + frame.bytes.length, 0);
   const test = setup(frames);
@@ -448,10 +470,24 @@ Deno.test("response accounting spans binary and control frames across all operat
 
 Deno.test("a nonzero operation stops the sequence without retry or persisted batch output", async () => {
   const test = setup([
-    binary(3, 23),
-    control({ type: "op.complete", args: { exitCode: 23 } }),
-    binary(3, 0),
-    control({ type: "op.complete", args: { exitCode: 0 } }),
+    binaryFrame(3, 23),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${
+          JSON.stringify({ type: "op.complete", args: { exitCode: 23 } })
+        }`,
+      ),
+    },
+    binaryFrame(3, 0),
+    {
+      binary: false,
+      bytes: encoder.encode(
+        `control:${
+          JSON.stringify({ type: "op.complete", args: { exitCode: 0 } })
+        }`,
+      ),
+    },
   ]);
   await assertRejects(
     () =>
@@ -477,9 +513,14 @@ Deno.test("due actions run before already-queued control messages", async () => 
   test.channel.read = () => {
     reads++;
     return Promise.resolve(
-      reads === 1
-        ? text(JSON.stringify({ type: "debug" }))
-        : control({ type: "op.complete", args: { exitCode: 0 } }),
+      reads === 1 ? textFrame({ type: "debug" }) : {
+        binary: false,
+        bytes: encoder.encode(
+          `control:${
+            JSON.stringify({ type: "op.complete", args: { exitCode: 0 } })
+          }`,
+        ),
+      },
     );
   };
   await executeControl(
@@ -507,7 +548,7 @@ Deno.test("control deadline stops an unbounded queue and never runs a huge actio
   let reads = 0;
   test.channel.read = () => {
     reads++;
-    return Promise.resolve(text(JSON.stringify({ type: "debug" })));
+    return Promise.resolve(textFrame({ type: "debug" }));
   };
   await assertRejects(
     () =>

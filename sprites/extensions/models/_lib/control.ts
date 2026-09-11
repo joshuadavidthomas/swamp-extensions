@@ -5,33 +5,66 @@ import {
   BinaryFile,
   concatenate,
   deadline,
+  decodeFrame,
   inputBytes,
   method,
   resource,
   withHandles,
 } from "./core.ts";
-import { ExecArgs } from "./exec.ts";
+import { ExecArgs, ExecControl } from "./exec.ts";
 import { type Channel, type ConnectChannel, openChannel } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
-import { decodeStreamFrame } from "./exec-http.ts";
+import {
+  decodeStreamFrame,
+  envPairs,
+  EOF_FRAME,
+  stdinFrame,
+} from "./exec-http.ts";
 import { initializeTerminal } from "./terminal.ts";
 
-const decoder = new TextDecoder("utf-8", { fatal: true });
 const CONTROL_PREFIX = "control:";
+const CONTROL_PREFIX_BYTES = new TextEncoder().encode(CONTROL_PREFIX);
 
 /** Control exec accepts only fields implemented by the native control protocol. */
-export const ControlExecOperationArgs = ExecArgs.pick({
-  cmd: true,
-  dir: true,
-  env: true,
-  input: true,
-  failOnNonZero: true,
-  tty: true,
-  rows: true,
-  cols: true,
-  closeStdin: true,
-  actions: true,
-}).strict();
+// ExecArgs carries a refinement, so zod refuses pick(); list the shared fields.
+export const ControlExecOperationArgs = z.object({
+  cmd: ExecArgs.shape.cmd,
+  dir: ExecArgs.shape.dir,
+  env: ExecArgs.shape.env,
+  input: ExecArgs.shape.input,
+  failOnNonZero: ExecArgs.shape.failOnNonZero,
+  tty: ExecArgs.shape.tty,
+  rows: ExecArgs.shape.rows,
+  cols: ExecArgs.shape.cols,
+  closeStdin: ExecArgs.shape.closeStdin,
+  actions: ExecArgs.shape.actions.transform((actions) =>
+    actions.toSorted((a, b) => a.atMs - b.atMs)
+  ),
+}).strict().superRefine((operation, ctx) => {
+  const issue = (message: string): void =>
+    ctx.addIssue({ code: "custom", message });
+  if (
+    !operation.tty &&
+    (operation.rows !== undefined || operation.cols !== undefined)
+  ) {
+    issue("Control exec rows and cols require a TTY operation.");
+  }
+  let eof = false;
+  for (const action of operation.actions) {
+    if (action.type === "resize" && !operation.tty) {
+      issue("Control exec resize requires a TTY operation.");
+    }
+    if (action.type === "eof" && operation.tty) {
+      issue("Control exec EOF is unsupported for TTY operations.");
+    }
+    if (action.type === "eof") {
+      if (eof) issue("Control exec accepts at most one EOF action.");
+      eof = true;
+    } else if (action.type === "stdin" && eof) {
+      issue("Control exec cannot send stdin after EOF.");
+    }
+  }
+});
 /** One control connection runs a bounded, non-overlapping operation sequence. */
 export const ControlExecArgs = z.object({
   operations: z.array(ControlExecOperationArgs).min(1).max(100),
@@ -47,7 +80,6 @@ const OperationMetadata = z.object({
   stderrLength: z.number().int().nonnegative(),
 });
 const ControlExecution = z.object({
-  operationCount: z.number().int().min(1).max(100),
   stdoutBytes: z.number().int().nonnegative(),
   stderrBytes: z.number().int().nonnegative(),
   operations: z.array(OperationMetadata).min(1).max(100),
@@ -60,15 +92,7 @@ const Completion = z.object({
 const OperationError = z.object({
   type: z.literal("op.error"),
   op: z.literal("exec").optional(),
-  args: z.object({ error: z.string().optional() }).optional(),
 });
-const OperationMessage = z.union([
-  z.object({ type: z.literal("exit"), exit_code: z.number().int() }),
-  z.object({
-    type: z.enum(["session_info", "port_opened", "port_closed", "debug"]),
-    tty: z.boolean().optional(),
-  }),
-]);
 const ServerControl = z.discriminatedUnion("type", [
   Completion,
   OperationError,
@@ -84,41 +108,11 @@ export type ControlExecResult = {
 };
 
 type Action = Operation["actions"][number];
-type AbortResult = { type: "abort" };
 type RaceResult =
   | { type: "message"; message: Awaited<ReturnType<Channel["read"]>> }
-  | { type: "wake" }
-  | AbortResult;
+  | { type: "wake" };
 
 const TIMEOUT_MESSAGE = "Control exec was cancelled or exceeded timeoutMs.";
-
-function validateOperation(operation: Operation): void {
-  if (
-    !operation.tty &&
-    (operation.rows !== undefined || operation.cols !== undefined)
-  ) {
-    throw new Error("Control exec rows and cols require a TTY operation.");
-  }
-  const ordered = operation.actions.map((action, index) => ({ action, index }))
-    .sort((left, right) =>
-      left.action.atMs - right.action.atMs || left.index - right.index
-    );
-  let eof = false;
-  for (const { action } of ordered) {
-    if (action.type === "resize" && !operation.tty) {
-      throw new Error("Control exec resize requires a TTY operation.");
-    }
-    if (action.type === "eof" && operation.tty) {
-      throw new Error("Control exec EOF is unsupported for TTY operations.");
-    }
-    if (action.type === "eof") {
-      if (eof) throw new Error("Control exec accepts at most one EOF action.");
-      eof = true;
-    } else if (action.type === "stdin" && eof) {
-      throw new Error("Control exec cannot send stdin after EOF.");
-    }
-  }
-}
 
 function startFrame(operation: Operation): string {
   const hasStdin = operation.input !== undefined ||
@@ -130,9 +124,7 @@ function startFrame(operation: Operation): string {
     : { cmd: operation.cmd };
   const args: Record<string, string | string[]> = {
     cmd: command.cmd,
-    env: Object.entries(operation.env ?? {}).map(([name, value]) =>
-      `${name}=${value}`
-    ),
+    env: envPairs(operation.env),
     stdin: hasStdin ? "true" : "false",
   };
   if (operation.dir !== undefined) args.dir = operation.dir;
@@ -144,86 +136,57 @@ function startFrame(operation: Operation): string {
   });
 }
 
-function parseControl(
-  bytes: Uint8Array,
-): z.output<typeof ServerControl> | z.output<typeof OperationMessage> {
-  let text: string;
-  try {
-    text = decoder.decode(bytes);
-  } catch {
-    throw new Error("Control exec returned invalid UTF-8 text.");
-  }
-  const envelope = text.startsWith(CONTROL_PREFIX);
-  let value: unknown;
-  try {
-    value = JSON.parse(envelope ? text.slice(CONTROL_PREFIX.length) : text);
-  } catch {
-    throw new Error("Control exec returned malformed control JSON.");
-  }
-  const parsed = envelope
-    ? ServerControl.safeParse(value)
-    : OperationMessage.safeParse(value);
-  if (!parsed.success) {
-    throw new Error(
-      `Control exec returned an unsupported ${
-        envelope ? "control" : "text"
-      } frame.`,
+function decodeControl(bytes: Uint8Array) {
+  const envelope = CONTROL_PREFIX_BYTES.every((byte, index) =>
+    bytes[index] === byte
+  );
+  return envelope
+    ? decodeFrame(
+      bytes.subarray(CONTROL_PREFIX_BYTES.length),
+      ServerControl,
+      "Control exec returned an unsupported control frame.",
+    )
+    : decodeFrame(
+      bytes,
+      ExecControl,
+      "Control exec returned an unsupported text frame.",
     );
-  }
-  return parsed.data;
-}
-
-async function sendAction(
-  channel: Channel,
-  operation: Operation,
-  action: Action,
-  abort: Promise<AbortResult>,
-  budget: ReturnType<typeof deadline>,
-): Promise<void> {
-  let payload: Uint8Array | string;
-  if (action.type === "stdin") {
-    const bytes = inputBytes(action.input);
-    payload = operation.tty ? bytes : concatenate([new Uint8Array([0]), bytes]);
-  } else if (action.type === "eof") {
-    payload = new Uint8Array([4]);
-  } else if (action.type === "resize") {
-    payload = JSON.stringify({
-      type: "resize",
-      cols: action.cols,
-      rows: action.rows,
-    });
-  } else {
-    payload = JSON.stringify({
-      type: "signal",
-      signal: action.signal,
-    });
-  }
-  budget.check(TIMEOUT_MESSAGE);
-  const outcome = await Promise.race([
-    channel.send(payload).then(() => ({ type: "action" } as const)),
-    abort,
-  ]);
-  if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
 }
 
 async function runOperation(
   channel: Channel,
   operation: Operation,
   account: (length: number) => void,
-  abort: Promise<AbortResult>,
+  abort: Promise<never>,
   budget: ReturnType<typeof deadline>,
 ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }> {
-  const frame = startFrame(operation);
-  budget.check(TIMEOUT_MESSAGE);
-  await Promise.race([
-    channel.send(frame).then(
-      () => ({ type: "action" } as const),
-    ),
-    abort,
-  ]).then((outcome) => {
-    if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
-  });
-  budget.check(TIMEOUT_MESSAGE);
+  const send = async (payload: string | Uint8Array): Promise<void> => {
+    budget.check(TIMEOUT_MESSAGE);
+    await Promise.race([channel.send(payload), abort]);
+    budget.check(TIMEOUT_MESSAGE);
+  };
+  async function sendAction(action: Action): Promise<void> {
+    let payload: Uint8Array | string;
+    if (action.type === "stdin") {
+      const bytes = inputBytes(action.input);
+      payload = stdinFrame(operation.tty, bytes);
+    } else if (action.type === "eof") {
+      payload = EOF_FRAME;
+    } else if (action.type === "resize") {
+      payload = JSON.stringify({
+        type: "resize",
+        cols: action.cols,
+        rows: action.rows,
+      });
+    } else {
+      payload = JSON.stringify({
+        type: "signal",
+        signal: action.signal,
+      });
+    }
+    await send(payload);
+  }
+  await send(startFrame(operation));
   const started = performance.now();
   const stdout: Uint8Array[] = [];
   const stderr: Uint8Array[] = [];
@@ -239,26 +202,10 @@ async function runOperation(
     exitSources.add(source);
     return code;
   };
-  const actions = operation.actions.map((action, index) => ({ action, index }))
-    .sort((left, right) =>
-      left.action.atMs - right.action.atMs || left.index - right.index
-    )
-    .map(({ action }) => action);
+  const actions = operation.actions;
   let actionIndex = 0;
-  const sendInput = async (bytes: Uint8Array): Promise<void> => {
-    budget.check(TIMEOUT_MESSAGE);
-    const payload = operation.tty
-      ? bytes
-      : concatenate([new Uint8Array([0]), bytes]);
-    const outcome = await Promise.race([
-      channel.send(payload).then(() => ({ type: "action" } as const)),
-      abort,
-    ]);
-    if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
-    budget.check(TIMEOUT_MESSAGE);
-  };
   if (operation.input !== undefined) {
-    await sendInput(inputBytes(operation.input));
+    await sendAction({ type: "stdin", atMs: 0, input: operation.input });
   }
   if (
     operation.input !== undefined && operation.closeStdin && !operation.tty &&
@@ -266,13 +213,7 @@ async function runOperation(
       action.type === "stdin" || action.type === "eof"
     )
   ) {
-    await sendAction(
-      channel,
-      operation,
-      { type: "eof", atMs: 0 },
-      abort,
-      budget,
-    );
+    await sendAction({ type: "eof", atMs: 0 });
   }
 
   let pendingRead = channel.read();
@@ -283,13 +224,7 @@ async function runOperation(
       ? Number.POSITIVE_INFINITY
       : nextAction.atMs - (performance.now() - started);
     if (nextAction !== undefined && actionRemaining <= 0) {
-      await sendAction(
-        channel,
-        operation,
-        nextAction,
-        abort,
-        budget,
-      );
+      await sendAction(nextAction);
       actionIndex++;
       continue;
     }
@@ -313,7 +248,6 @@ async function runOperation(
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
-    if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
     budget.check(TIMEOUT_MESSAGE);
     if (outcome.type === "wake") continue;
     const message = outcome.message;
@@ -343,8 +277,8 @@ async function runOperation(
       pendingRead = channel.read();
       continue;
     }
-    const control = parseControl(message.bytes);
-    if (control.type === "op.error") {
+    const control = decodeControl(message.bytes);
+    if (control.type === "op.error" || control.type === "error") {
       throw new Error(
         "Control exec reported an operation error; no partial output was saved.",
       );
@@ -356,7 +290,10 @@ async function runOperation(
       continue;
     }
     if (control.type !== "op.complete") {
-      if (control.tty !== undefined && control.tty !== operation.tty) {
+      if (
+        "tty" in control && control.tty !== undefined &&
+        control.tty !== operation.tty
+      ) {
         throw new Error("Control exec returned a mismatched TTY mode.");
       }
       pendingRead = channel.read();
@@ -373,12 +310,11 @@ async function runOperation(
     if (exitCode === undefined) {
       throw new Error("Control exec completed without an exit status.");
     }
-    const result = {
+    return {
       stdout: concatenate(stdout),
       stderr: concatenate(stderr),
       exitCode,
     };
-    return result;
   }
 }
 
@@ -388,7 +324,6 @@ export async function executeControl(
   args: z.output<typeof ControlExecArgs>,
   connect: ConnectChannel = openChannel,
 ): Promise<ControlExecResult> {
-  for (const operation of args.operations) validateOperation(operation);
   const budget = deadline(ctx);
   const { signal } = budget;
   let channel: Channel | undefined;
@@ -409,12 +344,12 @@ export async function executeControl(
         );
       }
     };
-    let resolveAbort: (value: AbortResult) => void = () => {};
-    const abort = new Promise<AbortResult>((resolve) => {
-      resolveAbort = resolve;
-    });
+    const { promise: abort, reject: rejectAbort } = Promise.withResolvers<
+      never
+    >();
+    void abort.catch(() => {});
     onAbort = (): void => {
-      resolveAbort({ type: "abort" });
+      rejectAbort(new Error(TIMEOUT_MESSAGE));
       void channel?.close();
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -455,12 +390,11 @@ export async function executeControl(
       stdoutOffset += result.stdout.length;
       stderrOffset += result.stderr.length;
     }
-    const result = {
+    return {
       operations,
       stdout: concatenate(stdout),
       stderr: concatenate(stderr),
     };
-    return result;
   } finally {
     budget.dispose();
     if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
@@ -475,7 +409,6 @@ export async function saveControlExecution(
 ) {
   ctx.signal.throwIfAborted();
   const data = {
-    operationCount: result.operations.length,
     stdoutBytes: result.stdout.length,
     stderrBytes: result.stderr.length,
     operations: result.operations,

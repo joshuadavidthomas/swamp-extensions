@@ -4,7 +4,14 @@ import { Buffer } from "node:buffer";
 import { Duplex } from "node:stream";
 import * as net from "node:net";
 import { z } from "zod";
-import { concatenate, deadline, method, type Query, resource } from "./core.ts";
+import {
+  concatenate,
+  deadline,
+  decodeFrame,
+  method,
+  type Query,
+  resource,
+} from "./core.ts";
 import {
   type Channel,
   type ConnectChannel,
@@ -12,7 +19,8 @@ import {
   readChannel,
 } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
-import { decodeStreamFrame } from "./exec-http.ts";
+import { ExecControl } from "./exec.ts";
+import { decodeStreamFrame, EOF_FRAME, stdinFrame } from "./exec-http.ts";
 const PYTHON = "/.sprite/bin/python3";
 const ACK = new TextEncoder().encode("connected\n");
 const PROGRAM = String.raw`import os,socket,sys,threading
@@ -48,47 +56,8 @@ try:
 except BaseException: die()
 sys.exit(0)`;
 
-const STDIN = 0;
-const EOF = 4;
-
-type Control = { type: string; exit_code?: number; error?: unknown };
-
 function failure(message: string): Error {
   return new Error(`Sprite exec TCP relay ${message}`);
-}
-
-function parseControl(bytes: Uint8Array): Control {
-  try {
-    const value: unknown = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
-    if (
-      !value || typeof value !== "object" ||
-      typeof (value as { type?: unknown }).type !== "string"
-    ) throw new Error();
-    const control = value as Control;
-    if (control.type === "error" || control.error !== undefined) {
-      throw failure("reported an exec protocol error.");
-    }
-    if (
-      !["session_info", "debug", "port_opened", "port_closed", "exit"].includes(
-        control.type,
-      )
-    ) {
-      throw new Error();
-    }
-    if (
-      control.type === "exit" &&
-      (typeof control.exit_code !== "number" ||
-        !Number.isInteger(control.exit_code) || control.exit_code < 0)
-    ) throw new Error();
-    return control;
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Sprite exec")) {
-      throw error;
-    }
-    throw failure("received an invalid JSON control frame.");
-  }
 }
 
 async function stopOwned(channel: Channel, exited: boolean): Promise<void> {
@@ -150,9 +119,17 @@ class ExecProxyDuplex extends Duplex {
         this.budget.check("Sprite exec TCP relay exceeded timeoutMs.");
         if (!message) throw failure("WebSocket closed without an exit frame.");
         if (!message.binary) {
-          const control = parseControl(message.bytes);
+          const control = decodeFrame(
+            message.bytes,
+            ExecControl,
+            "Sprite exec TCP relay received an invalid JSON control frame.",
+          );
+          if (
+            control.type === "error" ||
+            ("error" in control && control.error !== undefined)
+          ) throw failure("reported an exec protocol error.");
           if (control.type !== "exit") continue;
-          await this.#complete(control.exit_code!);
+          await this.#complete(control.exit_code);
           return;
         }
         const frame = decodeStreamFrame(message.bytes);
@@ -176,7 +153,7 @@ class ExecProxyDuplex extends Duplex {
     this.#finished = true;
     if (code !== 0) throw failure(`process exited with code ${code}.`);
     this.push(null);
-    await this.#cleanup(true);
+    await this.#cleanup();
   }
 
   override _write(
@@ -184,10 +161,7 @@ class ExecProxyDuplex extends Duplex {
     _encoding: BufferEncoding,
     callback: (error?: Error | null) => void,
   ): void {
-    const frame = new Uint8Array(chunk.length + 1);
-    frame[0] = STDIN;
-    frame.set(chunk, 1);
-    this.channel.send(frame).then(
+    this.channel.send(stdinFrame(false, chunk)).then(
       () => callback(),
       () => callback(failure("send failed.")),
     );
@@ -198,17 +172,17 @@ class ExecProxyDuplex extends Duplex {
       callback();
       return;
     }
-    this.channel.send(new Uint8Array([EOF])).then(
+    this.channel.send(EOF_FRAME).then(
       () => callback(),
       () => callback(failure("could not send stdin EOF.")),
     );
   }
 
-  #cleanup(exited = this.#exited): Promise<void> {
+  #cleanup(): Promise<void> {
     if (!this.#cleanupPromise) {
       this.budget.dispose();
       this.budget.signal.removeEventListener("abort", this.#onAbort);
-      this.#cleanupPromise = stopOwned(this.channel, exited);
+      this.#cleanupPromise = stopOwned(this.channel, this.#exited);
     }
     return this.#cleanupPromise;
   }
@@ -232,15 +206,11 @@ export async function connectExecProxy(
   port: number,
   connect: ConnectChannel = openChannel,
 ): Promise<Duplex> {
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw failure("target is invalid.");
-  }
   const budget = deadline(ctx);
   const { signal } = budget;
   let channel: Channel | undefined;
   let exited = false;
   try {
-    await verifySprite({ ...ctx, signal });
     signal.throwIfAborted();
     const remaining = budget.remainingMs();
     if (remaining <= 0) throw failure("exceeded timeoutMs before connecting.");
@@ -279,7 +249,15 @@ export async function connectExecProxy(
         throw failure("handshake exceeded maxResponseBytes.");
       }
       if (!message.binary) {
-        const control = parseControl(message.bytes);
+        const control = decodeFrame(
+          message.bytes,
+          ExecControl,
+          "Sprite exec TCP relay received an invalid JSON control frame.",
+        );
+        if (
+          control.type === "error" ||
+          ("error" in control && control.error !== undefined)
+        ) throw failure("reported an exec protocol error.");
         if (control.type === "exit") {
           exited = true;
           throw failure(`process exited with code ${control.exit_code}.`);
@@ -320,7 +298,7 @@ export async function connectExecProxy(
 }
 
 const Port = z.number().int().min(1).max(65_535);
-const ProxyArgs = z.object({
+export const ProxyArgs = z.object({
   localPort: Port.describe(
     "Required port bound only on the IPv4 loopback interface.",
   ),
@@ -376,10 +354,8 @@ async function runConnection(
     | { kind: "clean-remote-eof" | "client-close" }
     | { kind: "error"; error: Error };
   let outcome: ConnectionOutcome | undefined;
-  let resolveOutcome: (value: ConnectionOutcome) => void = () => {};
-  const connectionDone = new Promise<ConnectionOutcome>((resolve) => {
-    resolveOutcome = resolve;
-  });
+  const { promise: connectionDone, resolve: resolveOutcome } = Promise
+    .withResolvers<ConnectionOutcome>();
   const finishConnection = (value: ConnectionOutcome): void => {
     if (outcome) return;
     outcome = value;
@@ -415,10 +391,12 @@ async function runConnection(
 
   let primaryFailed = false;
   try {
-    let onTunnelData: ((chunk: Buffer) => void) | undefined;
-    let onTunnelEnd: (() => void) | undefined;
-    let onTunnelClose: (() => void) | undefined;
-    let onTunnelError: ((error: Error) => void) | undefined;
+    let handlers: {
+      data: (chunk: Buffer) => void;
+      end: () => void;
+      close: () => void;
+      error: (error: Error) => void;
+    } | undefined;
     try {
       try {
         tunnel = await connectExecProxy(
@@ -440,31 +418,33 @@ async function runConnection(
         throw error;
       }
       phase = "established";
-      onTunnelData = (chunk: Buffer): void => {
-        bytesFromRemote += chunk.length;
+      handlers = {
+        data: (chunk: Buffer): void => {
+          bytesFromRemote += chunk.length;
+        },
+        end: (): void => {
+          remoteEnded = true;
+          if (socketClosed) {
+            finishConnection({ kind: "clean-remote-eof" });
+          }
+        },
+        close: (): void => {
+          if (remoteEnded || socketClosed || outcome) return;
+          finishConnection({
+            kind: "error",
+            error: new Error(
+              "Sprite TCP proxy tunnel closed before remote EOF.",
+            ),
+          });
+        },
+        error: (error: Error): void => {
+          finishConnection({ kind: "error", error });
+        },
       };
-      onTunnelEnd = (): void => {
-        remoteEnded = true;
-        if (socketClosed) {
-          finishConnection({ kind: "clean-remote-eof" });
-        }
-      };
-      onTunnelClose = (): void => {
-        if (remoteEnded || socketClosed || outcome) return;
-        finishConnection({
-          kind: "error",
-          error: new Error(
-            "Sprite TCP proxy tunnel closed before remote EOF.",
-          ),
-        });
-      };
-      onTunnelError = (error: Error): void => {
-        finishConnection({ kind: "error", error });
-      };
-      tunnel.on("data", onTunnelData);
-      tunnel.once("end", onTunnelEnd);
-      tunnel.once("close", onTunnelClose);
-      tunnel.on("error", onTunnelError);
+      tunnel.on("data", handlers.data);
+      tunnel.once("end", handlers.end);
+      tunnel.once("close", handlers.close);
+      tunnel.on("error", handlers.error);
       socket.on("data", onSocketData);
       if (socketClosed) return { bytesFromClients, bytesFromRemote };
       socket.pipe(tunnel).pipe(socket);
@@ -484,15 +464,13 @@ async function runConnection(
       socket.off("close", onSocketClose);
       socket.off("end", onSocketEnd);
       socket.off("data", onSocketData);
-      if (tunnel) {
-        if (onTunnelData) tunnel.off("data", onTunnelData);
-        if (onTunnelEnd) tunnel.off("end", onTunnelEnd);
-        if (onTunnelClose) tunnel.off("close", onTunnelClose);
-        if (onTunnelError) {
-          const ownedTunnel = tunnel;
-          const handler = onTunnelError;
-          tunnel.once("close", () => ownedTunnel.off("error", handler));
-        }
+      if (tunnel && handlers) {
+        tunnel.off("data", handlers.data);
+        tunnel.off("end", handlers.end);
+        tunnel.off("close", handlers.close);
+        const ownedTunnel = tunnel;
+        const handler = handlers.error;
+        tunnel.once("close", () => ownedTunnel.off("error", handler));
       }
       socket.destroy();
       if (tunnel) {
@@ -529,10 +507,9 @@ async function runConnection(
 /** Own a loopback listener and every accepted socket within one global timeout budget. */
 export async function runProxy(
   ctx: SpriteContext,
-  input: z.input<typeof ProxyArgs>,
+  args: z.output<typeof ProxyArgs>,
   dependencies: ProxyDependencies = {},
 ): Promise<z.output<typeof ProxyOutput>> {
-  const args = ProxyArgs.parse(input);
   ctx.signal.throwIfAborted();
   const budget = deadline(ctx);
   // WebSocket frames also occupy Node buffers, so queued payloads alone stay
@@ -542,7 +519,7 @@ export async function runProxy(
     MAX_PROXY_QUEUE_BYTES,
     Math.floor(MAX_PROXY_AGGREGATE_QUEUE_BYTES / args.maxConnections),
   );
-  const timeoutError = new Error("TCP proxy exceeded timeoutMs.");
+  const TIMEOUT_MESSAGE = "TCP proxy exceeded timeoutMs.";
   const lifetime = new AbortController();
   const sessionContext = {
     ...ctx,
@@ -561,16 +538,21 @@ export async function runProxy(
   let durationEnded = false;
   const createServer = dependencies.createServer ?? net.createServer;
   const connect = dependencies.connect ?? openChannel;
-  let rejectFailure: (error: Error) => void = () => {};
-  const connectionFailure = new Promise<never>((_resolve, reject) => {
-    rejectFailure = reject;
-  });
+  const { promise: connectionFailure, reject: rejectFailure } = Promise
+    .withResolvers<never>();
   let firstFailure: Error | undefined;
-  const fail = (message: string): void => {
+  const fail = (error: Error): void => {
     if (firstFailure) return;
-    firstFailure = new Error(message);
+    firstFailure = error;
     rejectFailure(firstFailure);
   };
+  try {
+    await verifySprite({ ...ctx, signal: budget.signal });
+    budget.check(TIMEOUT_MESSAGE);
+  } catch (error) {
+    budget.dispose();
+    throw error;
+  }
   const server = createServer({ pauseOnConnect: true }, (socket) => {
     acceptedConnections += 1;
     if (sockets.size >= args.maxConnections) {
@@ -597,9 +579,13 @@ export async function runProxy(
       bytesFromRemote += counts.bytesFromRemote;
     }).catch((error: unknown) => {
       fail(
-        error instanceof Error && error.message.includes("timeoutMs")
-          ? timeoutError.message
-          : "A loopback TCP proxy connection failed.",
+        budget.signal.aborted
+          ? new Error(TIMEOUT_MESSAGE)
+          : error instanceof Error
+          ? error
+          : new Error("A loopback TCP proxy connection failed.", {
+            cause: error,
+          }),
       );
     }).finally(() => {
       sockets.delete(socket);
@@ -610,13 +596,13 @@ export async function runProxy(
   });
 
   let durationTimer: ReturnType<typeof setTimeout> | undefined;
-  const onParentAbort = (): void => fail("TCP proxy was cancelled.");
-  const onTimeout = (): void => fail(timeoutError.message);
+  const onParentAbort = (): void => fail(new Error("TCP proxy was cancelled."));
+  const onTimeout = (): void => fail(new Error(TIMEOUT_MESSAGE));
   const onServerError = (): void =>
-    fail("The loopback TCP proxy listener failed.");
+    fail(new Error("The loopback TCP proxy listener failed."));
   const onBindError = (): void =>
-    fail("Could not bind the loopback TCP proxy listener.");
-  const checkGlobalDeadline = (): void => budget.check(timeoutError.message);
+    fail(new Error("Could not bind the loopback TCP proxy listener."));
+  const checkGlobalDeadline = (): void => budget.check(TIMEOUT_MESSAGE);
   ctx.signal.addEventListener("abort", onParentAbort, { once: true });
   budget.signal.addEventListener("abort", onTimeout, { once: true });
   if (ctx.signal.aborted) onParentAbort();
@@ -648,17 +634,11 @@ export async function runProxy(
     if (durationTimer !== undefined) clearTimeout(durationTimer);
     server.off("error", onBindError);
     server.off("error", onServerError);
-    let closeResolved = false;
-    const serverClosed = new Promise<void>((resolve) => {
-      const done = (): void => {
-        if (closeResolved) return;
-        closeResolved = true;
-        resolve();
-      };
+    const serverClosed = new Promise<Error | undefined>((resolve) => {
       try {
-        server.close(done);
+        server.close(resolve);
       } catch {
-        done();
+        resolve(undefined);
       }
     });
     lifetime.abort(new Error("TCP proxy observation ended."));
@@ -671,8 +651,6 @@ export async function runProxy(
   }
   checkGlobalDeadline();
   if (firstFailure) throw firstFailure;
-  ctx.signal.throwIfAborted();
-  budget.signal.throwIfAborted();
   return {
     localAddress: "127.0.0.1",
     localPort: args.localPort,

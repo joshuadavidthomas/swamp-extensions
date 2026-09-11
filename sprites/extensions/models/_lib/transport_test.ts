@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStrictEquals,
+} from "@std/assert";
 import * as https from "node:https";
 import * as net from "node:net";
 import * as tls from "node:tls";
@@ -10,14 +16,15 @@ import { executeHttp } from "./exec-http.ts";
 import { requestGateway } from "./gateway.ts";
 import { openChannel, type SocketFactory } from "./socket.ts";
 import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
-import { connectExecProxy, runProxy } from "./proxy.ts";
+import { connectExecProxy, ProxyArgs, runProxy } from "./proxy.ts";
+import { testContext } from "./test_support.ts";
 
 const encoder = new TextEncoder();
 
 async function certificateFixture(): Promise<{
   cert: string;
   key: string;
-  cleanup(): Promise<void>;
+  cleanup(): void;
 }> {
   const directory = await Deno.makeTempDir({ prefix: "sprites-transport-" });
   const certPath = `${directory}/cert.pem`;
@@ -53,9 +60,14 @@ async function certificateFixture(): Promise<{
   return {
     cert: await Deno.readTextFile(certPath),
     key: await Deno.readTextFile(keyPath),
-    cleanup: () => Deno.remove(directory, { recursive: true }),
+    cleanup: () => Deno.removeSync(directory, { recursive: true }),
   };
 }
+
+const fixture = await certificateFixture();
+addEventListener("unload", () => {
+  fixture.cleanup();
+});
 
 function listen(server: https.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -127,22 +139,19 @@ function context(
   port: number,
   signal = new AbortController().signal,
 ): SpriteContext {
-  return {
-    globalArgs: SpriteArgsSchema.parse({
+  return testContext(
+    SpriteArgsSchema.parse({
       token: "placeholder",
       baseUrl: `https://127.0.0.1:${port}`,
       timeoutMs: 5_000,
       maxResponseBytes: 1_000_000,
       name: "worker",
     }),
-    signal,
-    logger: { info: () => {} },
-    readResource: () => Promise.resolve({ id: "fixture-sprite" }),
-  } as unknown as SpriteContext;
+    { signal, storedResources: { state: { id: "fixture-sprite" } } },
+  );
 }
 
 Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and cancellation", async () => {
-  const fixture = await certificateFixture();
   const server = https.createServer({ cert: fixture.cert, key: fixture.key });
   const webSockets = new WebSocketServer({ server });
   const requests: Array<{ url?: string; authorization?: string }> = [];
@@ -180,7 +189,7 @@ Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and 
     });
     const firstClose = channel.close();
     const secondClose = channel.close();
-    assertEquals(firstClose, secondClose);
+    assertStrictEquals(firstClose, secondClose);
     await firstClose;
 
     const controller = new AbortController();
@@ -194,7 +203,7 @@ Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and 
     controller.abort();
     await assertRejects(() => pendingRead, Error, "cancelled");
     const cancelledClose = cancelled.close();
-    assertEquals(cancelledClose, cancelled.close());
+    assertStrictEquals(cancelledClose, cancelled.close());
     await cancelledClose;
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -215,12 +224,10 @@ Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and 
     for (const socket of webSockets.clients) socket.terminate();
     webSockets.close();
     await closeServer(server);
-    await fixture.cleanup();
   }
 });
 
 Deno.test("openChannel bounds queued empty frames", async () => {
-  const fixture = await certificateFixture();
   const server = https.createServer({ cert: fixture.cert, key: fixture.key });
   const webSockets = new WebSocketServer({ server });
   let resolveSent: () => void = () => {};
@@ -252,12 +259,10 @@ Deno.test("openChannel bounds queued empty frames", async () => {
     for (const socket of webSockets.clients) socket.terminate();
     webSockets.close();
     await closeServer(server);
-    await fixture.cleanup();
   }
 });
 
 Deno.test("openChannel drops a large backpressured queue as soon as its byte limit fails", async () => {
-  const fixture = await certificateFixture();
   const server = https.createServer({ cert: fixture.cert, key: fixture.key });
   const webSockets = new WebSocketServer({ server });
   let resolveSent: () => void = () => {};
@@ -292,37 +297,23 @@ Deno.test("openChannel drops a large backpressured queue as soon as its byte lim
     for (const socket of webSockets.clients) socket.terminate();
     webSockets.close();
     await closeServer(server);
-    await fixture.cleanup();
   }
 });
 
-function mockSpriteVerification(): () => void {
-  const original = globalThis.fetch;
-  globalThis.fetch = (() =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({
-          id: "fixture-sprite",
-          name: "worker",
-          organization: "org",
-          url: "https://worker.example",
-          status: "running",
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-          url_settings: null,
-          version: null,
-          environment_version: null,
-        }),
-        { headers: { "content-type": "application/json" } },
-      ),
-    )) as typeof fetch;
-  return () => {
-    globalThis.fetch = original;
-  };
-}
+const sprite = {
+  id: "fixture-sprite",
+  name: "worker",
+  organization: "org",
+  url: "https://worker.example",
+  status: "running",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  url_settings: null,
+  version: null,
+  environment_version: null,
+};
 
 Deno.test("runProxy delivers close-delimited responses before bounded cleanup", async () => {
-  const fixture = await certificateFixture();
   const outer = https.createServer({ cert: fixture.cert, key: fixture.key });
   const webSockets = new WebSocketServer({ server: outer });
   const body = Buffer.alloc(128 * 1_024);
@@ -359,87 +350,108 @@ Deno.test("runProxy delivers close-delimited responses before bounded cleanup", 
       socket.send(Buffer.from([3, 0]), { binary: true });
     });
   });
-  const restoreVerification = mockSpriteVerification();
-  try {
-    const outerPort = await listen(outer);
-    const ctx = context(outerPort);
-    const socketFactory: SocketFactory = (url, options) =>
-      new WebSocket(url, { ...options, ca: fixture.cert });
-    const connectWithCa: typeof openChannel = (
-      channelContext,
-      path,
-      query = {},
-    ) => openChannel(channelContext, path, query, socketFactory);
+  const { calls } = await withMockedFetch(
+    Array.from({ length: 2 }, () =>
+      new Response(JSON.stringify(sprite), {
+        headers: { "content-type": "application/json" },
+      })),
+    async () => {
+      try {
+        const outerPort = await listen(outer);
+        const ctx = context(outerPort);
+        const socketFactory: SocketFactory = (url, options) =>
+          new WebSocket(url, { ...options, ca: fixture.cert });
+        const connectWithCa: typeof openChannel = (
+          channelContext,
+          path,
+          query = {},
+        ) => openChannel(channelContext, path, query, socketFactory);
 
-    {
-      const localPort = await reserveTcpPort();
-      let proxySettled = false;
-      const proxy = runProxy(ctx, {
-        localPort,
-        host: "service.internal",
-        port: 8080,
-        durationMs: 1_000,
-      }, { connect: connectWithCa }).finally(() => {
-        proxySettled = true;
-      });
-      void proxy.catch(() => {});
-      const client = await connectTcp(localPort);
-      client.pause();
-      const received: Buffer[] = [];
-      const ended = new Promise<void>((resolve, reject) => {
-        client.on("data", (chunk) => received.push(Buffer.from(chunk)));
-        client.once("end", resolve);
-        client.once("error", reject);
-      });
-      client.write("GET /close-delimited HTTP/1.1\r\nHost: local\r\n\r\n");
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      client.resume();
-      await ended;
-      assertEquals(proxySettled, false);
-      assertEquals(Buffer.concat(received), response);
-      client.destroy();
-      const output = await proxy;
-      assertEquals(output.acceptedConnections, 1);
-      assertEquals(output.completedConnections, 1);
-      assertEquals(output.bytesFromRemote, response.length);
-    }
+        {
+          const localPort = await reserveTcpPort();
+          let proxySettled = false;
+          const proxy = runProxy(
+            ctx,
+            ProxyArgs.parse({
+              localPort,
+              host: "service.internal",
+              port: 8080,
+              durationMs: 1_000,
+            }),
+            { connect: connectWithCa },
+          ).finally(() => {
+            proxySettled = true;
+          });
+          void proxy.catch(() => {});
+          const client = await connectTcp(localPort);
+          client.pause();
+          const received: Buffer[] = [];
+          const ended = new Promise<void>((resolve, reject) => {
+            client.on("data", (chunk) => received.push(Buffer.from(chunk)));
+            client.once("end", resolve);
+            client.once("error", reject);
+          });
+          client.write("GET /close-delimited HTTP/1.1\r\nHost: local\r\n\r\n");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          client.resume();
+          await ended;
+          assertEquals(proxySettled, false);
+          assertEquals(Buffer.concat(received), response);
+          client.destroy();
+          const output = await proxy;
+          assertEquals(output.acceptedConnections, 1);
+          assertEquals(output.completedConnections, 1);
+          assertEquals(output.bytesFromRemote, response.length);
+        }
 
-    const localPort = await reserveTcpPort();
-    let pendingProxySettled = false;
-    const pendingProxy = runProxy(ctx, {
-      localPort,
-      host: "pending.internal",
-      port: 8080,
-      durationMs: 500,
-    }, { connect: connectWithCa }).finally(() => {
-      pendingProxySettled = true;
-    });
-    void pendingProxy.catch(() => {});
-    const client = await connectTcp(localPort);
-    for (let attempt = 0; attempt < 50 && !pendingHandshakeStarted; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    assertEquals(pendingHandshakeStarted, true);
-    client.destroy();
-    for (let attempt = 0; attempt < 50 && !pendingHandshakeClosed; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    assertEquals(pendingHandshakeClosed, true);
-    assertEquals(pendingProxySettled, false);
-    const output = await pendingProxy;
-    assertEquals(output.acceptedConnections, 1);
-    assertEquals(output.completedConnections, 1);
-  } finally {
-    restoreVerification();
-    for (const socket of webSockets.clients) socket.terminate();
-    webSockets.close();
-    await closeServer(outer);
-    await fixture.cleanup();
-  }
+        const localPort = await reserveTcpPort();
+        let pendingProxySettled = false;
+        const pendingProxy = runProxy(
+          ctx,
+          ProxyArgs.parse({
+            localPort,
+            host: "pending.internal",
+            port: 8080,
+            durationMs: 500,
+          }),
+          { connect: connectWithCa },
+        ).finally(() => {
+          pendingProxySettled = true;
+        });
+        void pendingProxy.catch(() => {});
+        const client = await connectTcp(localPort);
+        for (
+          let attempt = 0;
+          attempt < 50 && !pendingHandshakeStarted;
+          attempt++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 2));
+        }
+        assertEquals(pendingHandshakeStarted, true);
+        client.destroy();
+        for (
+          let attempt = 0;
+          attempt < 50 && !pendingHandshakeClosed;
+          attempt++
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 2));
+        }
+        assertEquals(pendingHandshakeClosed, true);
+        assertEquals(pendingProxySettled, false);
+        const output = await pendingProxy;
+        assertEquals(output.acceptedConnections, 1);
+        assertEquals(output.completedConnections, 1);
+      } finally {
+        for (const socket of webSockets.clients) socket.terminate();
+        webSockets.close();
+        await closeServer(outer);
+      }
+    },
+  );
+  assertEquals(calls.length, 2);
 });
 
 Deno.test("executeHttp uses real hostname-checked TLS and decodes exact HTTP chunks", async () => {
-  const fixture = await certificateFixture();
   let requestUrl = "";
   let authorization = "";
   let requestBody = new Uint8Array();
@@ -518,12 +530,10 @@ Deno.test("executeHttp uses real hostname-checked TLS and decodes exact HTTP chu
     assertEquals(empty.exitCode, 3);
   } finally {
     await closeServer(server);
-    await fixture.cleanup();
   }
 });
 
 Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner TLS session", async () => {
-  const fixture = await certificateFixture();
   let innerAuthorization: string | undefined;
   let innerBody = new Uint8Array();
   const gateway = https.createServer(
@@ -581,15 +591,17 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
     });
     socket.on("close", () => upstream.destroy());
   });
-  const restoreVerification = mockSpriteVerification();
   try {
     gatewayPort = await listen(gateway);
     const outerPort = await listen(outer);
     const ctx = context(outerPort);
     const socketFactory: SocketFactory = (url, options) =>
       new WebSocket(url, { ...options, ca: fixture.cert });
-    const caConnect: typeof openChannel = (channelContext, path, query = {}) =>
-      openChannel(channelContext, path, query, socketFactory);
+    const caConnect: typeof openChannel = (
+      channelContext,
+      path,
+      query = {},
+    ) => openChannel(channelContext, path, query, socketFactory);
     const result = await requestGateway(ctx, {
       method: "POST",
       path: "/v1/gateway/demo",
@@ -614,12 +626,10 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
     assertEquals(result.headers["set-cookie"], ["one=1", "two=2"]);
     assertEquals(result.body, new Uint8Array([0, 254, 3]));
   } finally {
-    restoreVerification();
     for (const socket of webSockets.clients) socket.terminate();
     for (const socket of tcpSockets) socket.destroy();
     webSockets.close();
     await closeServer(outer);
     await closeServer(gateway);
-    await fixture.cleanup();
   }
 });

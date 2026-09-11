@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
+import { withMockedFetch } from "@swamp-club/swamp-testing";
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { createModelTestContext } from "@swamp-club/swamp-testing";
 import type { Query } from "./core.ts";
 import type { Channel, Message } from "./socket.ts";
-import type { SpriteContext } from "./sprite-api.ts";
-import { connectExecProxy, runProxy } from "./proxy.ts";
+import { connectExecProxy, ProxyArgs, runProxy } from "./proxy.ts";
 
-import { FakeChannel } from "./test_support.ts";
+import {
+  binaryFrame,
+  FakeChannel,
+  testContext,
+  textFrame,
+} from "./test_support.ts";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type * as net from "node:net";
@@ -31,41 +35,19 @@ const sprite = {
   environment_version: null,
 };
 
-function context(
-  signal = new AbortController().signal,
-  overrides: Partial<SpriteContext["globalArgs"]> = {},
-): SpriteContext {
-  const args = { ...globalArgs, ...overrides };
-  const { context } = createModelTestContext({ globalArgs: args });
-  return {
-    ...context,
-    globalArgs: args,
-    signal,
-    readResource: () => Promise.resolve({ id: sprite.id }),
-    deleteResource: () => Promise.resolve(),
-  };
-}
 function binary(stream: number, bytes: number[] = []): Message {
-  return { binary: true, bytes: new Uint8Array([stream, ...bytes]) };
+  return binaryFrame(stream, ...bytes);
 }
-function control(value: unknown): Message {
-  return { binary: false, bytes: encoder.encode(JSON.stringify(value)) };
-}
-
 async function verified<T>(run: () => Promise<T>): Promise<T> {
-  const original = globalThis.fetch;
-  globalThis.fetch = (() =>
-    Promise.resolve(
+  const { result } = await withMockedFetch(
+    [
       new Response(JSON.stringify(sprite), {
-        status: 200,
         headers: { "content-type": "application/json" },
       }),
-    )) as typeof fetch;
-  try {
-    return await run();
-  } finally {
-    globalThis.fetch = original;
-  }
+    ],
+    run,
+  );
+  return result;
 }
 
 function fakeServer(
@@ -96,23 +78,26 @@ function fakeServer(
 }
 Deno.test("exec relay uses fixed argv, split ack, and queues raw stdout", async () => {
   const channel = new FakeChannel([
-    control({ type: "session_info", session_id: "session", tty: false }),
-    control({ type: "port_opened", port: 5432 }),
+    textFrame({ type: "session_info", session_id: "session", tty: false }),
+    textFrame({ type: "port_opened", port: 5432 }),
     binary(1, [0, 255, 8]),
     binary(2, Array.from(encoder.encode("conn"))),
-    control({ type: "debug", message: "starting" }),
+    textFrame({ type: "debug", message: "starting" }),
     binary(2, Array.from(encoder.encode("ected\n"))),
-    control({ type: "port_closed", port: 5432 }),
+    textFrame({ type: "port_closed", port: 5432 }),
     binary(1, [7, 6]),
     binary(3, [0]),
   ]);
   let query: Query | undefined;
-  const stream = await verified(() =>
-    connectExecProxy(context(), "db.internal", 5432, (_ctx, path, value) => {
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "db.internal",
+    5432,
+    (_ctx, path, value) => {
       assertEquals(path, "/v1/sprites/demo%20sprite/exec");
       query = value;
       return Promise.resolve(channel);
-    })
+    },
   );
   const argv = query!.cmd as string[];
   assertEquals(argv.slice(0, 4), [
@@ -143,8 +128,11 @@ Deno.test("exec relay frames stdin bytes and sends EOF without closing the chann
   const channel = new FakeChannel([
     binary(2, Array.from(encoder.encode("connected\n"))),
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   await new Promise<void>((resolve, reject) =>
     stream.write(
@@ -170,13 +158,11 @@ Deno.test("exec relay rejects a connection failure before acknowledgement", asyn
   ]);
   await assertRejects(
     () =>
-      verified(() =>
-        connectExecProxy(
-          context(),
-          "missing",
-          9,
-          () => Promise.resolve(channel),
-        )
+      connectExecProxy(
+        testContext(globalArgs),
+        "missing",
+        9,
+        () => Promise.resolve(channel),
       ),
     Error,
     "did not receive",
@@ -192,8 +178,11 @@ Deno.test("exec relay reports nonzero native binary exit as an error", async () 
     binary(2, Array.from(encoder.encode("connected\n"))),
     binary(3, [124]),
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
   const closed = new Promise<void>((resolve) => stream.once("close", resolve));
@@ -206,12 +195,15 @@ Deno.test("exec relay reports nonzero native binary exit as an error", async () 
 Deno.test("exec relay accepts the native JSON exit code", async () => {
   const channel = new FakeChannel([
     binary(2, Array.from(encoder.encode("connected\n"))),
-    control({ type: "port_opened", port: 1234 }),
-    control({ type: "port_closed", port: 1234 }),
-    control({ type: "exit", exit_code: 0 }),
+    textFrame({ type: "port_opened", port: 1234 }),
+    textFrame({ type: "port_closed", port: 1234 }),
+    textFrame({ type: "exit", exit_code: 0 }),
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   const output: number[] = [];
   for await (const chunk of stream) output.push(...chunk);
@@ -224,8 +216,11 @@ Deno.test("exec relay treats WebSocket close without exit as an error", async ()
     binary(2, Array.from(encoder.encode("connected\n"))),
     null,
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
   const closed = new Promise<void>((resolve) => stream.once("close", resolve));
@@ -239,8 +234,11 @@ Deno.test("destroy signals the owned remote exec and closes its channel", async 
   const channel = new FakeChannel([
     binary(2, Array.from(encoder.encode("connected\n"))),
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   const closed = new Promise<void>((resolve) => stream.once("close", resolve));
   stream.destroy();
@@ -256,13 +254,13 @@ Deno.test("parent cancellation destroys an established relay", async () => {
   const channel = new FakeChannel([
     binary(2, Array.from(encoder.encode("connected\n"))),
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(
-      context(abort.signal),
-      "service",
-      80,
-      () => Promise.resolve(channel),
-    )
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {
+      signal: abort.signal,
+    }),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   const failed = new Promise<Error>((resolve) => stream.once("error", resolve));
   const closed = new Promise<void>((resolve) => stream.once("close", resolve));
@@ -285,11 +283,14 @@ Deno.test("exec relay enforces its monotonic deadline while control frames stay 
     if (channel.reads === 0) return originalRead();
     channel.reads++;
     now += 10_000;
-    return Promise.resolve(control({ type: "debug", message: "queued" }));
+    return Promise.resolve(textFrame({ type: "debug", message: "queued" }));
   };
   try {
-    const stream = await verified(() =>
-      connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+    const stream = await connectExecProxy(
+      testContext(globalArgs, {}),
+      "service",
+      80,
+      () => Promise.resolve(channel),
     );
     const failed = new Promise<Error>((resolve) =>
       stream.once("error", resolve)
@@ -309,8 +310,11 @@ Deno.test("exec relay stops channel reads when its consumer backpressures", asyn
     binary(1, Array(100_000).fill(1)),
     binary(1, Array(100_000).fill(2)),
   ]);
-  const stream = await verified(() =>
-    connectExecProxy(context(), "service", 80, () => Promise.resolve(channel))
+  const stream = await connectExecProxy(
+    testContext(globalArgs, {}),
+    "service",
+    80,
+    () => Promise.resolve(channel),
   );
   try {
     stream.read(0);
@@ -333,13 +337,15 @@ Deno.test("proxy global timeout closes a zero-client listener", () =>
     await assertRejects(
       () =>
         runProxy(
-          context(undefined, { timeoutMs: 2 }),
-          {
+          testContext({ ...globalArgs, timeoutMs: 50 }, {
+            storedResources: { state: { id: sprite.id } },
+          }),
+          ProxyArgs.parse({
             localPort: 41000,
             host: "db.example.net",
             port: 5432,
             durationMs: 1_000,
-          },
+          }),
           {
             createServer: (() => server) as unknown as typeof net.createServer,
           },
@@ -376,20 +382,26 @@ Deno.test("proxy rejects a handshake still pending when duration cleanup aborts 
     });
     await assertRejects(
       () =>
-        runProxy(context(), {
-          localPort: 41000,
-          host: "db.example.net",
-          port: 5432,
-          durationMs: 2,
-        }, {
-          connect: () => Promise.resolve(channel),
-          createServer: ((_options: unknown, onConnection: typeof accept) => {
-            accept = onConnection;
-            return server;
-          }) as unknown as typeof net.createServer,
-        }),
+        runProxy(
+          testContext(globalArgs, {
+            storedResources: { state: { id: sprite.id } },
+          }),
+          ProxyArgs.parse({
+            localPort: 41000,
+            host: "db.example.net",
+            port: 5432,
+            durationMs: 2,
+          }),
+          {
+            connect: () => Promise.resolve(channel),
+            createServer: ((_options: unknown, onConnection: typeof accept) => {
+              accept = onConnection;
+              return server;
+            }) as unknown as typeof net.createServer,
+          },
+        ),
       Error,
-      "connection failed",
+      "TCP proxy observation ended.",
     );
     assertEquals(listenerClosed, true);
     assertEquals(channelClosed, true);
@@ -406,18 +418,24 @@ Deno.test("proxy cancels its owned handshake when the local client closes", () =
       accept(socket as unknown as net.Socket);
       queueMicrotask(() => socket.destroy());
     });
-    const output = await runProxy(context(), {
-      localPort: 41000,
-      host: "db.example.net",
-      port: 5432,
-      durationMs: 2,
-    }, {
-      connect: () => Promise.resolve(channel),
-      createServer: ((_options: unknown, onConnection: typeof accept) => {
-        accept = onConnection;
-        return server;
-      }) as unknown as typeof net.createServer,
-    });
+    const output = await runProxy(
+      testContext(globalArgs, {
+        storedResources: { state: { id: sprite.id } },
+      }),
+      ProxyArgs.parse({
+        localPort: 41000,
+        host: "db.example.net",
+        port: 5432,
+        durationMs: 2,
+      }),
+      {
+        connect: () => Promise.resolve(channel),
+        createServer: ((_options: unknown, onConnection: typeof accept) => {
+          accept = onConnection;
+          return server;
+        }) as unknown as typeof net.createServer,
+      },
+    );
     assertEquals(output.acceptedConnections, 1);
     assertEquals(output.completedConnections, 1);
     assertEquals(channel.closed, true);
@@ -451,23 +469,29 @@ Deno.test("proxy duration treats active-channel abort of an established tunnel a
       callback();
       accept(socket as unknown as net.Socket);
     });
-    const output = await runProxy(context(), {
-      localPort: 41000,
-      host: "db.example.net",
-      port: 5432,
-      durationMs: 2,
-    }, {
-      connect: (ctx) => {
-        ctx.signal.addEventListener("abort", () => channel.close(), {
-          once: true,
-        });
-        return Promise.resolve(channel);
+    const output = await runProxy(
+      testContext(globalArgs, {
+        storedResources: { state: { id: sprite.id } },
+      }),
+      ProxyArgs.parse({
+        localPort: 41000,
+        host: "db.example.net",
+        port: 5432,
+        durationMs: 2,
+      }),
+      {
+        connect: (ctx) => {
+          ctx.signal.addEventListener("abort", () => channel.close(), {
+            once: true,
+          });
+          return Promise.resolve(channel);
+        },
+        createServer: ((_options: unknown, onConnection: typeof accept) => {
+          accept = onConnection;
+          return server;
+        }) as unknown as typeof net.createServer,
       },
-      createServer: ((_options: unknown, onConnection: typeof accept) => {
-        accept = onConnection;
-        return server;
-      }) as unknown as typeof net.createServer,
-    });
+    );
     assertEquals(output.acceptedConnections, 1);
     assertEquals(output.completedConnections, 1);
     assertEquals(channelClosed, true);
@@ -488,18 +512,24 @@ Deno.test("proxy global timeout expires a pending handshake and closes every own
     });
     await assertRejects(
       () =>
-        runProxy(context(undefined, { timeoutMs: 50 }), {
-          localPort: 41000,
-          host: "db.example.net",
-          port: 5432,
-          durationMs: 1_000,
-        }, {
-          connect: () => Promise.resolve(channel),
-          createServer: ((_options: unknown, onConnection: typeof accept) => {
-            accept = onConnection;
-            return server;
-          }) as unknown as typeof net.createServer,
-        }),
+        runProxy(
+          testContext({ ...globalArgs, timeoutMs: 50 }, {
+            storedResources: { state: { id: sprite.id } },
+          }),
+          ProxyArgs.parse({
+            localPort: 41000,
+            host: "db.example.net",
+            port: 5432,
+            durationMs: 1_000,
+          }),
+          {
+            connect: () => Promise.resolve(channel),
+            createServer: ((_options: unknown, onConnection: typeof accept) => {
+              accept = onConnection;
+              return server;
+            }) as unknown as typeof net.createServer,
+          },
+        ),
       Error,
       "timeoutMs",
     );
@@ -521,28 +551,33 @@ Deno.test("proxy gives late connections the remaining deadline and aggregate que
       callback();
       setTimeout(() => accept(socket as unknown as net.Socket), 10);
     });
-    const ctx = context(undefined, {
+    const ctx = testContext({
+      ...globalArgs,
       timeoutMs: 200,
       maxResponseBytes: 8 * 1024 * 1024,
-    });
-    const output = await runProxy(ctx, {
-      localPort: 41000,
-      host: "db.example.net",
-      port: 5432,
-      durationMs: 30,
-      maxConnections: 1_024,
-    }, {
-      connect: (connectionContext) => {
-        connectionTimeoutMs = connectionContext.globalArgs.timeoutMs;
-        connectionMaxResponseBytes =
-          connectionContext.globalArgs.maxResponseBytes;
-        return Promise.resolve(channel);
+    }, { storedResources: { state: { id: sprite.id } } });
+    const output = await runProxy(
+      ctx,
+      ProxyArgs.parse({
+        localPort: 41000,
+        host: "db.example.net",
+        port: 5432,
+        durationMs: 30,
+        maxConnections: 1_024,
+      }),
+      {
+        connect: (connectionContext) => {
+          connectionTimeoutMs = connectionContext.globalArgs.timeoutMs;
+          connectionMaxResponseBytes =
+            connectionContext.globalArgs.maxResponseBytes;
+          return Promise.resolve(channel);
+        },
+        createServer: ((_options: unknown, onConnection: typeof accept) => {
+          accept = onConnection;
+          return server;
+        }) as unknown as typeof net.createServer,
       },
-      createServer: ((_options: unknown, onConnection: typeof accept) => {
-        accept = onConnection;
-        return server;
-      }) as unknown as typeof net.createServer,
-    });
+    );
     assertEquals(output.acceptedConnections, 1);
     assertEquals(connectionMaxResponseBytes, 128 * 1024);
     assertEquals(connectionTimeoutMs > 0, true);
@@ -562,14 +597,20 @@ Deno.test("proxy binds only loopback and reports closed listener counters", () =
     }, () => {
       closed = true;
     });
-    const output = await runProxy(context(), {
-      localPort: 41000,
-      host: "db.example.net",
-      port: 5432,
-      durationMs: 1,
-    }, {
-      createServer: (() => server) as unknown as typeof net.createServer,
-    });
+    const output = await runProxy(
+      testContext(globalArgs, {
+        storedResources: { state: { id: sprite.id } },
+      }),
+      ProxyArgs.parse({
+        localPort: 41000,
+        host: "db.example.net",
+        port: 5432,
+        durationMs: 1,
+      }),
+      {
+        createServer: (() => server) as unknown as typeof net.createServer,
+      },
+    );
     assertEquals(listenOptions, {
       host: "127.0.0.1",
       port: 41000,
@@ -612,23 +653,30 @@ for (const finish of ["duration", "cancel", "failure"] as const) {
           });
         });
       });
-      const pending = runProxy(context(controller.signal), {
-        localPort: 41000,
-        host: "db.example.net",
-        port: 5432,
-        durationMs: 30,
-        maxConnections: 1,
-      }, {
-        connect: (_ctx, path) => {
-          connections++;
-          connectedPath = path;
-          return Promise.resolve(channel);
+      const pending = runProxy(
+        testContext(globalArgs, {
+          signal: controller.signal,
+          storedResources: { state: { id: sprite.id } },
+        }),
+        ProxyArgs.parse({
+          localPort: 41000,
+          host: "db.example.net",
+          port: 5432,
+          durationMs: 30,
+          maxConnections: 1,
+        }),
+        {
+          connect: (_ctx, path) => {
+            connections++;
+            connectedPath = path;
+            return Promise.resolve(channel);
+          },
+          createServer: ((_options: unknown, onConnection: typeof accept) => {
+            accept = onConnection;
+            return server;
+          }) as unknown as typeof net.createServer,
         },
-        createServer: ((_options: unknown, onConnection: typeof accept) => {
-          accept = onConnection;
-          return server;
-        }) as unknown as typeof net.createServer,
-      });
+      );
       const timer = setTimeout(() => {
         if (finish === "cancel") controller.abort();
         if (finish === "failure") {
@@ -680,18 +728,24 @@ for (const rejectClose of [false, true]) {
         accept(socket as unknown as net.Socket);
       });
       let settled = false;
-      const pending = runProxy(context(), {
-        localPort: 41000,
-        host: "db.example.net",
-        port: 5432,
-        durationMs: 2,
-      }, {
-        connect: () => Promise.resolve(channel),
-        createServer: ((_options: unknown, onConnection: typeof accept) => {
-          accept = onConnection;
-          return server;
-        }) as unknown as typeof net.createServer,
-      });
+      const pending = runProxy(
+        testContext(globalArgs, {
+          storedResources: { state: { id: sprite.id } },
+        }),
+        ProxyArgs.parse({
+          localPort: 41000,
+          host: "db.example.net",
+          port: 5432,
+          durationMs: 2,
+        }),
+        {
+          connect: () => Promise.resolve(channel),
+          createServer: ((_options: unknown, onConnection: typeof accept) => {
+            accept = onConnection;
+            return server;
+          }) as unknown as typeof net.createServer,
+        },
+      );
       void pending.then(() => {
         settled = true;
       }, () => {
@@ -704,7 +758,7 @@ for (const rejectClose of [false, true]) {
         assertEquals(socket.destroyed, true);
         if (rejectClose) {
           closing.reject(new Error("deferred close failed"));
-          await assertRejects(() => pending, Error, "connection failed");
+          await assertRejects(() => pending, Error, "cleanup failed");
         } else {
           closing.resolve();
           const output = await pending;
@@ -718,3 +772,48 @@ for (const rejectClose of [false, true]) {
       }
     }));
 }
+
+Deno.test("proxy verifies identity once before accepting multiple connections", async () => {
+  const channels = [
+    new FakeChannel([binary(2, [...encoder.encode("connected\n")])]),
+    new FakeChannel([binary(2, [...encoder.encode("connected\n")])]),
+  ];
+  const sockets = [new PassThrough(), new PassThrough()];
+  let connections = 0;
+  let accept: (socket: net.Socket) => void;
+  const server = fakeServer((_options, bound) => {
+    bound();
+    for (const socket of sockets) accept(socket as unknown as net.Socket);
+  });
+  const { calls, result } = await withMockedFetch([
+    new Response(JSON.stringify(sprite), {
+      headers: { "content-type": "application/json" },
+    }),
+  ], () =>
+    runProxy(
+      testContext(globalArgs, {
+        storedResources: { state: { id: sprite.id } },
+      }),
+      ProxyArgs.parse({
+        localPort: 41000,
+        host: "db.internal",
+        port: 5432,
+        durationMs: 10,
+      }),
+      {
+        connect: () => Promise.resolve(channels[connections++]),
+        createServer: ((_options: unknown, onConnection: typeof accept) => {
+          accept = onConnection;
+          return server;
+        }) as unknown as typeof net.createServer,
+      },
+    ));
+  assertEquals(calls.length, 1);
+  assertEquals(
+    calls[0].url,
+    "https://api.sprites.dev/v1/sprites/demo%20sprite",
+  );
+  assertEquals(connections, 2);
+  assertEquals(result.completedConnections, 2);
+  assertEquals(channels.every((channel) => channel.closed), true);
+});

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { method } from "./core.ts";
+import { concatenate, method } from "./core.ts";
 import { z } from "zod";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createModelTestContext } from "@swamp-club/swamp-testing";
@@ -11,19 +11,12 @@ import {
   saveExecution,
 } from "./exec.ts";
 import { decodeHttpExec } from "./exec-http.ts";
-import { type Channel, type ConnectChannel, type Message } from "./socket.ts";
+import { type ConnectChannel, type Message } from "./socket.ts";
 import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
+import { binaryFrame, FakeChannel, textFrame } from "./test_support.ts";
 import { TERMINAL_PROGRAM, TERMINAL_PYTHON } from "./terminal.ts";
 
 const encoder = new TextEncoder();
-const binary = (...bytes: number[]): Message => ({
-  binary: true,
-  bytes: new Uint8Array(bytes),
-});
-const control = (value: unknown): Message => ({
-  binary: false,
-  bytes: encoder.encode(JSON.stringify(value)),
-});
 function setup(messages: Message[]) {
   const globalArgs = SpriteArgsSchema.parse({
     token: "test-token",
@@ -35,20 +28,10 @@ function setup(messages: Message[]) {
     globalArgs,
     deleteResource: () => Promise.resolve(),
   };
-  const sent: (string | Uint8Array)[] = [];
-  let closed = false;
   let connectedPath = "";
   let query: unknown;
-  const channel: Channel = {
-    read: () => Promise.resolve(messages.shift() ?? null),
-    send: (data) => {
-      sent.push(data);
-      return Promise.resolve();
-    },
-    close: () => {
-      closed = true;
-    },
-  };
+  const channel = new FakeChannel([...messages, null]);
+  const sent = channel.sent;
   const connect: ConnectChannel = (_ctx, path, value) => {
     connectedPath = path;
     query = value;
@@ -60,17 +43,17 @@ function setup(messages: Message[]) {
     channel,
     connect,
     sent,
-    closed: () => closed,
+    closed: () => channel.closed,
     path: () => connectedPath,
     query: () => query,
   };
 }
 Deno.test("WebSocket exec preserves binary streams, repeated argv/env, stdin EOF, and exit status", async () => {
   const test = setup([
-    control({ type: "session_info", session_id: "7", tty: false }),
-    binary(1, 0, 255),
-    binary(2, 128),
-    binary(3, 0),
+    textFrame({ type: "session_info", session_id: "7", tty: false }),
+    binaryFrame(1, 0, 255),
+    binaryFrame(2, 128),
+    binaryFrame(3, 0),
   ]);
   const args = ExecArgs.parse({
     cmd: ["printf", "a b"],
@@ -112,7 +95,7 @@ Deno.test("direct exec preserves a delayed explicit EOF with default closeStdin"
     });
   test.channel.send = (data) => {
     test.sent.push(data);
-    finishRead(binary(3, 0));
+    finishRead(binaryFrame(3, 0));
     return Promise.resolve();
   };
   const originalTimeout = globalThis.setTimeout;
@@ -147,9 +130,9 @@ Deno.test("direct exec preserves a delayed explicit EOF with default closeStdin"
 
 Deno.test("direct TTY initializes its size in the command before stdin", async () => {
   const test = setup([
-    control({ type: "session_info", session_id: "8", tty: true }),
-    binary(0, 1),
-    control({ type: "exit", exit_code: 0 }),
+    textFrame({ type: "session_info", session_id: "8", tty: true }),
+    binaryFrame(0, 1),
+    textFrame({ type: "exit", exit_code: 0 }),
   ]);
   const result = await executeSocket(
     test.ctx,
@@ -197,13 +180,13 @@ Deno.test("direct TTY initializes its size in the command before stdin", async (
 });
 Deno.test("attachment takes TTY mode from session_info and handles JSON exit", async () => {
   const test = setup([
-    binary(0, 1),
-    control({ type: "session_info", session_id: "42", tty: true }),
-    binary(2, 255),
-    control({ type: "exit", exit_code: 9 }),
+    binaryFrame(0, 1),
+    textFrame({ type: "session_info", session_id: "42", tty: true }),
+    binaryFrame(2, 255),
+    textFrame({ type: "exit", exit_code: 9 }),
   ]);
   let reads = 0;
-  const read = test.channel.read;
+  const read = test.channel.read.bind(test.channel);
   test.channel.read = () => {
     reads++;
     return read();
@@ -217,6 +200,7 @@ Deno.test("attachment takes TTY mode from session_info and handles JSON exit", a
     test.ctx,
     AttachArgs.parse({
       session_id: "42",
+      tty: true,
       rows: 24,
       cols: 80,
       input: { kind: "text", text: "help\n" },
@@ -248,9 +232,23 @@ Deno.test("attachment takes TTY mode from session_info and handles JSON exit", a
 });
 Deno.test("exec refuses disconnect without exit, bad frames, wrong session, and response overrun", async () => {
   for (
-    const frames of [[], [binary(8, 0)], [
-      control({ type: "error", message: "provider-secret" }),
-    ]]
+    const frames of [
+      [],
+      [binaryFrame(8, 0)],
+      [
+        textFrame({ type: "error", message: "provider-secret" }),
+      ],
+      [textFrame({ type: "exit" })],
+      [textFrame({ type: "exit", exit_code: 0.5 })],
+      [{
+        binary: false,
+        bytes: concatenate([
+          encoder.encode('{"type":"debug","message":"'),
+          new Uint8Array([255]),
+          encoder.encode('"}'),
+        ]),
+      }],
+    ]
   ) {
     const test = setup(frames);
     await assertRejects(() =>
@@ -259,7 +257,7 @@ Deno.test("exec refuses disconnect without exit, bad frames, wrong session, and 
     assert(test.closed());
   }
   const wrong = setup([
-    control({ type: "session_info", session_id: "wrong", tty: true }),
+    textFrame({ type: "session_info", session_id: "wrong", tty: true }),
   ]);
   await assertRejects(
     () =>
@@ -271,7 +269,7 @@ Deno.test("exec refuses disconnect without exit, bad frames, wrong session, and 
     Error,
     "unexpected session",
   );
-  const large = setup([binary(1, 1, 2)]);
+  const large = setup([binaryFrame(1, 1, 2)]);
   large.ctx.globalArgs.maxResponseBytes = 2;
   await assertRejects(
     () =>
@@ -319,9 +317,9 @@ Deno.test("exec rejects action and detach timers above the platform maximum", ()
 
 Deno.test("exec can detach with a known session and cancels pending actions", async () => {
   const test = setup([
-    control({ type: "session_info", session_id: "7", tty: true }),
+    textFrame({ type: "session_info", session_id: "7", tty: true }),
   ]);
-  const originalRead = test.channel.read;
+  const originalRead = test.channel.read.bind(test.channel);
   let reads = 0;
   test.channel.read = () =>
     reads++ === 0 ? originalRead() : new Promise(() => {});
@@ -358,15 +356,7 @@ function httpWire(frames: Uint8Array[]): Uint8Array {
     );
   }
   parts.push(encoder.encode("0\r\nX-Result: done\r\n\r\n"));
-  const result = new Uint8Array(
-    parts.reduce((size, part) => size + part.length, 0),
-  );
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
+  return concatenate(parts);
 }
 function stream(bytes: Uint8Array, step: number): ReadableStream<Uint8Array> {
   let offset = 0;
@@ -419,4 +409,21 @@ Deno.test("HTTP exec rejects missing exit, malformed frames, truncation, and byt
     Error,
     "maxResponseBytes",
   );
+});
+
+Deno.test("exec dimensions require tty", () => {
+  for (const dimensions of [{ rows: 24 }, { cols: 80 }]) {
+    assertEquals(
+      ExecArgs.safeParse({ cmd: ["true"], ...dimensions }).success,
+      false,
+    );
+    assertEquals(
+      AttachArgs.safeParse({ session_id: "1", ...dimensions }).success,
+      false,
+    );
+    assertEquals(
+      ExecArgs.safeParse({ cmd: ["true"], tty: true, ...dimensions }).success,
+      true,
+    );
+  }
 });

@@ -5,11 +5,19 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { createModelTestContext } from "@swamp-club/swamp-testing";
 import type { Message } from "./socket.ts";
-import { type SpriteContext } from "./sprite-api.ts";
-import { observeWatch, watchPorts } from "./observe.ts";
-import { FakeChannel } from "./test_support.ts";
+import {
+  observeWatch,
+  PortWatchArgs,
+  WatchArgs,
+  watchPorts,
+} from "./observe.ts";
+import {
+  binaryFrame,
+  FakeChannel,
+  testContext,
+  textFrame,
+} from "./test_support.ts";
 
 const encoder = new TextEncoder();
 const globalArgs = {
@@ -19,26 +27,9 @@ const globalArgs = {
   maxResponseBytes: 1_000_000,
   name: "demo sprite",
 };
-function context(
-  signal = new AbortController().signal,
-  overrides: Partial<SpriteContext["globalArgs"]> = {},
-): SpriteContext {
-  const args = { ...globalArgs, ...overrides };
-  const { context } = createModelTestContext({ globalArgs: args });
-  return {
-    ...context,
-    globalArgs: args,
-    signal,
-    deleteResource: () => Promise.resolve(),
-  };
-}
-function text(value: unknown): Message {
-  return { binary: false, bytes: encoder.encode(JSON.stringify(value)) };
-}
-
 Deno.test("watch reports bounded provider errors with the bearer token removed", async () => {
   const channel = new FakeChannel([
-    text({
+    textFrame({
       type: "error",
       message: `failed for ${globalArgs.token}\n\u2028\u202e${
         "x".repeat(1000)
@@ -48,8 +39,8 @@ Deno.test("watch reports bounded provider errors with the bearer token removed",
   const error = await assertRejects(
     () =>
       observeWatch(
-        context(),
-        { paths: ["."], durationMs: 100 },
+        testContext(globalArgs),
+        WatchArgs.parse({ paths: ["."], durationMs: 100 }),
         () => Promise.resolve(channel),
       ),
     Error,
@@ -63,19 +54,19 @@ Deno.test("watch reports bounded provider errors with the bearer token removed",
 
 Deno.test("watch bounds cumulative received bytes even when its queue drains", async () => {
   const channel = new FakeChannel([
-    text({ type: "subscribed" }),
-    text({ type: "event", path: "first-long-path", event: "write" }),
-    text({ type: "event", path: "second-long-path", event: "write" }),
+    textFrame({ type: "subscribed" }),
+    textFrame({ type: "event", path: "first-long-path", event: "write" }),
+    textFrame({ type: "event", path: "second-long-path", event: "write" }),
   ]);
   const ctx = {
-    ...context(),
+    ...testContext(globalArgs),
     globalArgs: { ...globalArgs, maxResponseBytes: 90 },
   };
   await assertRejects(
     () =>
       observeWatch(
         ctx,
-        { paths: ["."], durationMs: 1_000, maxEvents: 10 },
+        WatchArgs.parse({ paths: ["."], durationMs: 1_000, maxEvents: 10 }),
         () => Promise.resolve(channel),
       ),
     Error,
@@ -84,20 +75,21 @@ Deno.test("watch bounds cumulative received bytes even when its queue drains", a
   assertEquals(channel.closed, true);
 });
 
-Deno.test("watch monotonic deadline stops an unbounded resolved queue", async () => {
+Deno.test("watch duration timer stops a continuing event stream", async () => {
   const channel = new FakeChannel([]);
   let reads = 0;
-  channel.read = () => {
+  channel.read = async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     reads++;
     return Promise.resolve(
       reads === 1
-        ? text({ type: "subscribed" })
-        : text({ type: "event", path: "queued", event: "write" }),
+        ? textFrame({ type: "subscribed" })
+        : textFrame({ type: "event", path: "queued", event: "write" }),
     );
   };
   const output = await observeWatch(
-    context(undefined, { maxResponseBytes: 1_073_741_824 }),
-    { paths: ["."], durationMs: 1, maxEvents: 100_000 },
+    testContext({ ...globalArgs, maxResponseBytes: 1_073_741_824 }),
+    WatchArgs.parse({ paths: ["."], durationMs: 1, maxEvents: 100_000 }),
     () => Promise.resolve(channel),
   );
   assertEquals(output.events.length < 100_000, true);
@@ -107,8 +99,8 @@ Deno.test("watch monotonic deadline stops an unbounded resolved queue", async ()
 
 Deno.test("watch sends the exact subscription and preserves typed events up to its cap", async () => {
   const channel = new FakeChannel([
-    text({ type: "subscribed", paths: ["src"] }),
-    text({
+    textFrame({ type: "subscribed", paths: ["src"] }),
+    textFrame({
       type: "event",
       path: "src/a.ts",
       event: "write",
@@ -117,16 +109,20 @@ Deno.test("watch sends the exact subscription and preserves typed events up to i
       isDir: false,
     }),
   ]);
-  const output = await observeWatch(context(), {
-    paths: ["src"],
-    recursive: true,
-    workingDir: "/app",
-    durationMs: 1_000,
-    maxEvents: 1,
-  }, (_ctx, path) => {
-    assertEquals(path, "/v1/sprites/demo%20sprite/fs/watch");
-    return Promise.resolve(channel);
-  });
+  const output = await observeWatch(
+    testContext(globalArgs),
+    WatchArgs.parse({
+      paths: ["src"],
+      recursive: true,
+      workingDir: "/app",
+      durationMs: 1_000,
+      maxEvents: 1,
+    }),
+    (_ctx, path) => {
+      assertEquals(path, "/v1/sprites/demo%20sprite/fs/watch");
+      return Promise.resolve(channel);
+    },
+  );
   assertEquals(channel.sent, [
     JSON.stringify({
       type: "subscribe",
@@ -151,13 +147,13 @@ Deno.test("watch sends the exact subscription and preserves typed events up to i
 
 Deno.test("watch requires acknowledgement and closes on protocol failure", async () => {
   const channel = new FakeChannel([
-    text({ type: "event", path: "a", event: "create" }),
+    textFrame({ type: "event", path: "a", event: "create" }),
   ]);
   const error = await assertRejects(
     () =>
       observeWatch(
-        context(),
-        { paths: ["."], durationMs: 10 },
+        testContext(globalArgs),
+        WatchArgs.parse({ paths: ["."], durationMs: 10 }),
         () => Promise.resolve(channel),
       ),
     Error,
@@ -169,10 +165,14 @@ Deno.test("watch requires acknowledgement and closes on protocol failure", async
 Deno.test("watch cancellation fails and closes a pending read", async () => {
   const controller = new AbortController();
   const channel = new FakeChannel([]);
-  const pending = observeWatch(context(controller.signal), {
-    paths: ["."],
-    durationMs: 1_000,
-  }, () => Promise.resolve(channel));
+  const pending = observeWatch(
+    testContext(globalArgs, { signal: controller.signal }),
+    WatchArgs.parse({
+      paths: ["."],
+      durationMs: 1_000,
+    }),
+    () => Promise.resolve(channel),
+  );
   controller.abort(new Error("parent stopped"));
   await assertRejects(() => pending, Error, "parent stopped");
   assertEquals(channel.closed, true);
@@ -193,12 +193,12 @@ const closed = {
 
 Deno.test("port watch reads the snapshot and notifications without sending client frames", async () => {
   const channel = new FakeChannel([
-    text({ type: "port_list", ports: [opened] }),
-    text(closed),
+    textFrame({ type: "port_list", ports: [opened] }),
+    textFrame(closed),
   ]);
   const output = await watchPorts(
-    context(),
-    { durationMs: 1_000, maxEvents: 1 },
+    testContext(globalArgs),
+    PortWatchArgs.parse({ durationMs: 1_000, maxEvents: 1 }),
     (_ctx, path, query) => {
       assertEquals(path, "/v1/sprites/demo%20sprite/ports/watch");
       assertEquals(query, undefined);
@@ -217,12 +217,12 @@ Deno.test("port watch reads the snapshot and notifications without sending clien
 for (const ports of [[], null]) {
   Deno.test(`port watch normalizes ${ports === null ? "null" : "empty"} initial ports`, async () => {
     const channel = new FakeChannel([
-      text({ type: "port_list", ports }),
-      text(opened),
+      textFrame({ type: "port_list", ports }),
+      textFrame(opened),
     ]);
     const output = await watchPorts(
-      context(),
-      { durationMs: 1_000, maxEvents: 1 },
+      testContext(globalArgs),
+      PortWatchArgs.parse({ durationMs: 1_000, maxEvents: 1 }),
       () => Promise.resolve(channel),
     );
     assertEquals(output.initialPorts, []);
@@ -233,14 +233,17 @@ for (const ports of [[], null]) {
 
 Deno.test("port watch requires a valid initial port_list snapshot", async () => {
   const cases: Array<{ name: string; message: Message }> = [
-    { name: "notification", message: text(opened) },
+    { name: "notification", message: textFrame(opened) },
     {
       name: "missing ports",
-      message: text({ type: "port_list" }),
+      message: textFrame({ type: "port_list" }),
     },
     {
       name: "invalid port",
-      message: text({ type: "port_list", ports: [{ ...opened, port: 0 }] }),
+      message: textFrame({
+        type: "port_list",
+        ports: [{ ...opened, port: 0 }],
+      }),
     },
     {
       name: "malformed JSON",
@@ -248,11 +251,11 @@ Deno.test("port watch requires a valid initial port_list snapshot", async () => 
     },
     {
       name: "binary",
-      message: { binary: true, bytes: encoder.encode("secret") },
+      message: binaryFrame(...encoder.encode("secret")),
     },
     {
       name: "error",
-      message: text({ type: "error", message: "secret" }),
+      message: textFrame({ type: "error", message: "secret" }),
     },
   ];
   for (const testCase of cases) {
@@ -260,8 +263,8 @@ Deno.test("port watch requires a valid initial port_list snapshot", async () => 
     const error = await assertRejects(
       () =>
         watchPorts(
-          context(),
-          { durationMs: 100 },
+          testContext(globalArgs),
+          PortWatchArgs.parse({ durationMs: 100 }),
           () => Promise.resolve(channel),
         ),
       Error,
@@ -279,15 +282,15 @@ Deno.test("port watch treats closure before or after the snapshot as failure", a
   for (
     const [name, messages] of [
       ["snapshot", [null]],
-      ["observation", [text({ type: "port_list", ports: [] }), null]],
+      ["observation", [textFrame({ type: "port_list", ports: [] }), null]],
     ] as const
   ) {
     const channel = new FakeChannel([...messages]);
     const error = await assertRejects(
       () =>
         watchPorts(
-          context(),
-          { durationMs: 100 },
+          testContext(globalArgs),
+          PortWatchArgs.parse({ durationMs: 100 }),
           () => Promise.resolve(channel),
         ),
       Error,
@@ -302,7 +305,7 @@ Deno.test("port watch rejects binary, malformed, error, and transport notificati
   const cases: Array<{ name: string; next: Message | Error }> = [
     {
       name: "binary",
-      next: { binary: true, bytes: encoder.encode("secret") },
+      next: binaryFrame(...encoder.encode("secret")),
     },
     {
       name: "malformed JSON",
@@ -310,20 +313,20 @@ Deno.test("port watch rejects binary, malformed, error, and transport notificati
     },
     {
       name: "error frame",
-      next: text({ type: "error", message: "secret" }),
+      next: textFrame({ type: "error", message: "secret" }),
     },
     { name: "transport error", next: new Error("secret transport detail") },
   ];
   for (const testCase of cases) {
     const channel = new FakeChannel([
-      text({ type: "port_list", ports: [] }),
+      textFrame({ type: "port_list", ports: [] }),
       testCase.next,
     ]);
     const error = await assertRejects(
       () =>
         watchPorts(
-          context(),
-          { durationMs: 100 },
+          testContext(globalArgs),
+          PortWatchArgs.parse({ durationMs: 100 }),
           () => Promise.resolve(channel),
         ),
       Error,
@@ -338,22 +341,23 @@ Deno.test("port watch rejects binary, malformed, error, and transport notificati
   }
 });
 
-Deno.test("port watch monotonic deadline stops an unbounded resolved queue", async () => {
+Deno.test("port watch duration timer stops a continuing event stream", async () => {
   const channel = new FakeChannel([
-    text({ type: "port_list", ports: [] }),
+    textFrame({ type: "port_list", ports: [] }),
   ]);
   let first = true;
-  channel.read = () => {
+  channel.read = async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     channel.reads++;
     if (first) {
       first = false;
-      return Promise.resolve(text({ type: "port_list", ports: [] }));
+      return Promise.resolve(textFrame({ type: "port_list", ports: [] }));
     }
-    return Promise.resolve(text(opened));
+    return Promise.resolve(textFrame(opened));
   };
   const output = await watchPorts(
-    context(undefined, { maxResponseBytes: 1_073_741_824 }),
-    { durationMs: 1, maxEvents: 100_000 },
+    testContext({ ...globalArgs, maxResponseBytes: 1_073_741_824 }),
+    PortWatchArgs.parse({ durationMs: 1, maxEvents: 100_000 }),
     () => Promise.resolve(channel),
   );
   assert(output.notifications.length < 100_000);
@@ -363,11 +367,11 @@ Deno.test("port watch monotonic deadline stops an unbounded resolved queue", asy
 
 Deno.test("port watch duration caps a pending observation after its snapshot", async () => {
   const channel = new FakeChannel([
-    text({ type: "port_list", ports: [opened] }),
+    textFrame({ type: "port_list", ports: [opened] }),
   ]);
   const output = await watchPorts(
-    context(),
-    { durationMs: 2 },
+    testContext(globalArgs),
+    PortWatchArgs.parse({ durationMs: 2 }),
     () => Promise.resolve(channel),
   );
   assertEquals(output, {
@@ -379,16 +383,17 @@ Deno.test("port watch duration caps a pending observation after its snapshot", a
 });
 
 Deno.test("port watch bounds cumulative bytes across the snapshot and drained frames", async () => {
-  const first = text({ type: "port_list", ports: [] });
-  const next = text(opened);
+  const first = textFrame({ type: "port_list", ports: [] });
+  const next = textFrame(opened);
   const channel = new FakeChannel([first, next]);
   await assertRejects(
     () =>
       watchPorts(
-        context(undefined, {
+        testContext({
+          ...globalArgs,
           maxResponseBytes: first.bytes.length + next.bytes.length - 1,
         }),
-        { durationMs: 1_000, maxEvents: 1 },
+        PortWatchArgs.parse({ durationMs: 1_000, maxEvents: 1 }),
         () => Promise.resolve(channel),
       ),
     Error,
@@ -399,13 +404,13 @@ Deno.test("port watch bounds cumulative bytes across the snapshot and drained fr
 
 Deno.test("port watch maxEvents excludes the separately bounded initial snapshot", async () => {
   const channel = new FakeChannel([
-    text({ type: "port_list", ports: [opened, closed] }),
-    text(opened),
-    text(closed),
+    textFrame({ type: "port_list", ports: [opened, closed] }),
+    textFrame(opened),
+    textFrame(closed),
   ]);
   const output = await watchPorts(
-    context(),
-    { durationMs: 1_000, maxEvents: 1 },
+    testContext(globalArgs),
+    PortWatchArgs.parse({ durationMs: 1_000, maxEvents: 1 }),
     () => Promise.resolve(channel),
   );
   assertEquals(output.initialPorts.length, 2);
@@ -418,8 +423,8 @@ Deno.test("port watch fails on parent cancellation and closes its pending read",
   const controller = new AbortController();
   const channel = new FakeChannel([]);
   const pending = watchPorts(
-    context(controller.signal),
-    { durationMs: 1_000 },
+    testContext(globalArgs, { signal: controller.signal }),
+    PortWatchArgs.parse({ durationMs: 1_000 }),
     () => Promise.resolve(channel),
   );
   controller.abort(new Error("parent stopped"));
@@ -432,8 +437,8 @@ Deno.test("port watch enforces the global timeout before the first frame", async
   await assertRejects(
     () =>
       watchPorts(
-        context(undefined, { timeoutMs: 2 }),
-        { durationMs: 1_000 },
+        testContext({ ...globalArgs, timeoutMs: 2 }),
+        PortWatchArgs.parse({ durationMs: 1_000 }),
         () => Promise.resolve(channel),
       ),
     Error,

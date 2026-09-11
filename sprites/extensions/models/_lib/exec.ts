@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   BinaryFile,
   concatenate,
+  decodeFrame,
   Input,
   inputBytes,
   jsonRequest,
@@ -16,7 +17,10 @@ import {
 import {
   type CommandResult,
   decodeStreamFrame,
+  envPairs,
+  EOF_FRAME,
   executeHttp,
+  stdinFrame,
 } from "./exec-http.ts";
 import { type ConnectChannel, openChannel } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
@@ -64,38 +68,50 @@ const SocketArgs = z.object({
   detachAfterMs: TimerMs.positive().optional().describe(
     "Save session identity and disconnect after this duration instead of waiting for exit.",
   ),
-});
+}).refine(
+  (args) => args.tty || (args.rows === undefined && args.cols === undefined),
+  "Exec rows and cols require a TTY session.",
+);
 /** WebSocket command arguments. */
-export const ExecArgs = CommandArgs.extend(SocketArgs.shape);
+export const ExecArgs = SocketArgs.safeExtend(CommandArgs.shape);
 /** Attachment uses the server session_info to determine TTY mode. */
-export const AttachArgs = SocketArgs.extend({
+export const AttachArgs = SocketArgs.safeExtend({
   session_id: z.string().min(1),
   input: Input.optional().meta({ sensitive: true }),
   failOnNonZero: z.boolean().default(true),
 });
-const Control = z.object({
-  type: z.string(),
-  session_id: z.string().optional(),
-  command: z.string().optional(),
-  created: z.number().optional(),
-  is_owner: z.boolean().optional(),
-  tty: z.boolean().optional(),
-  cols: z.number().optional(),
-  rows: z.number().optional(),
-  exit_code: z.number().int().optional(),
-  port: z.number().optional(),
-  address: z.string().optional(),
-  pid: z.number().optional(),
-  message: z.string().optional(),
-  error: z.string().optional(),
-});
+/** Text control frames emitted by the exec protocol. */
+export const ExecControl = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("exit"), exit_code: z.number().int() }),
+  z.object({
+    type: z.enum([
+      "session_info",
+      "port_opened",
+      "port_closed",
+      "debug",
+      "error",
+    ]),
+    session_id: z.string().optional(),
+    command: z.string().optional(),
+    created: z.number().optional(),
+    is_owner: z.boolean().optional(),
+    tty: z.boolean().optional(),
+    cols: z.number().optional(),
+    rows: z.number().optional(),
+    port: z.number().optional(),
+    address: z.string().optional(),
+    pid: z.number().optional(),
+    message: z.string().optional(),
+    error: z.string().optional(),
+  }),
+]);
 const Execution = z.object({
   status: z.enum(["exited", "detached"]),
   exitCode: z.number().int().nullable(),
   sessionId: z.string().nullable(),
   stdoutBytes: z.number().int().nonnegative(),
   stderrBytes: z.number().int().nonnegative(),
-  controls: z.array(Control).meta({ sensitive: true }),
+  controls: z.array(ExecControl).meta({ sensitive: true }),
 });
 const Session = z.object({
   id: z.union([z.string(), z.number().int()]),
@@ -120,7 +136,7 @@ const Killed = z.object({ events: z.array(KillEvent) });
 export type SocketResult = Omit<CommandResult, "exitCode"> & {
   exitCode: number | null;
   sessionId: string | null;
-  controls: z.output<typeof Control>[];
+  controls: z.output<typeof ExecControl>[];
   status: "exited" | "detached";
 };
 
@@ -142,16 +158,14 @@ export async function executeSocket(
     ...(!attaching
       ? {
         ...command,
-        env: Object.entries(args.env ?? {}).map(([key, value]) =>
-          `${key}=${value}`
-        ),
+        env: envPairs(args.env),
         dir: args.dir,
       }
       : {}),
     stdin: true,
     tty: args.tty,
-    rows: attaching || !args.tty ? args.rows : undefined,
-    cols: attaching || !args.tty ? args.cols : undefined,
+    rows: attaching ? args.rows : undefined,
+    cols: attaching ? args.cols : undefined,
     detachable: args.detachable,
     cc: args.cc,
     max_run_after_disconnect: args.max_run_after_disconnect,
@@ -162,17 +176,15 @@ export async function executeSocket(
     query,
   );
   const stdout: Uint8Array[] = [], stderr: Uint8Array[] = [];
-  const controls: z.output<typeof Control>[] = [];
+  const controls: z.output<typeof ExecControl>[] = [];
   let totalBytes = 0;
   let tty = args.tty;
   let sessionId: string | null = attaching ? args.session_id : null;
   let exitCode: number | null = null;
   let detached = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  let rejectAction: (error: unknown) => void = () => {};
-  const actionFailure = new Promise<never>((_resolve, reject) => {
-    rejectAction = reject;
-  });
+  const { promise: actionFailure, reject: rejectAction } = Promise
+    .withResolvers<never>();
   let ready = !attaching;
   const scrollback: Uint8Array[] = [];
   const receiveBinary = (bytes: Uint8Array): void => {
@@ -184,7 +196,7 @@ export async function executeSocket(
     }
   };
   const sendInput = async (data: Uint8Array): Promise<void> => {
-    await channel.send(tty ? data : concatenate([new Uint8Array([0]), data]));
+    await channel.send(stdinFrame(tty, data));
   };
   const startActions = async (): Promise<void> => {
     if (
@@ -200,7 +212,7 @@ export async function executeSocket(
       !args.actions.some((action) =>
         action.type === "stdin" || action.type === "eof"
       )
-    ) await channel.send(new Uint8Array([4]));
+    ) await channel.send(EOF_FRAME);
     for (const action of args.actions) {
       const timer = setTimeout(() => {
         timers.delete(timer);
@@ -208,7 +220,7 @@ export async function executeSocket(
           if (action.type === "stdin") {
             await sendInput(inputBytes(action.input));
           } else if (action.type === "eof") {
-            if (!tty) await channel.send(new Uint8Array([4]));
+            if (!tty) await channel.send(EOF_FRAME);
           } else if (action.type === "resize") {
             if (!tty) throw new Error("Resize requires a TTY session.");
             await channel.send(
@@ -252,16 +264,13 @@ export async function executeSocket(
         );
       }
       if (!message.binary) {
-        let value: z.output<typeof Control>;
-        try {
-          value = Control.parse(
-            JSON.parse(new TextDecoder().decode(message.bytes)),
-          );
-        } catch {
-          throw new Error("Exec returned an invalid JSON control frame.");
-        }
+        const value = decodeFrame(
+          message.bytes,
+          ExecControl,
+          "Exec returned an invalid JSON control frame.",
+        );
         controls.push(value);
-        if (value.type === "error" || value.error) {
+        if (value.type === "error" || ("error" in value && value.error)) {
           throw new Error("Exec reported a protocol error.");
         }
         if (value.type === "session_info") {
@@ -281,9 +290,6 @@ export async function executeSocket(
           }
         }
         if (value.type === "exit") {
-          if (value.exit_code === undefined) {
-            throw new Error("Exec exit frame omitted exit_code.");
-          }
           exitCode = value.exit_code;
         }
       } else {
@@ -397,9 +403,7 @@ export const execMethods = {
         cmd: args.cmd,
         path: args.path,
         dir: args.dir,
-        env: Object.entries(args.env ?? {}).map(([key, value]) =>
-          `${key}=${value}`
-        ),
+        env: envPairs(args.env),
         stdin: args.input !== undefined,
       }, inputBytes(args.input));
       return await saveExecution(ctx, {

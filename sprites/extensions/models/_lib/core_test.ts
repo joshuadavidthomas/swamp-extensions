@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: MIT
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
-import {
-  createModelTestContext,
-  withMockedFetch,
-} from "@swamp-club/swamp-testing";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
 import { z } from "zod";
+import { testContext } from "./test_support.ts";
 import {
   ApiError,
   apiUrl,
   AuthSchema,
   concatenate,
-  type Context,
   deadline,
   emptyRequest,
   InvalidResponseError,
@@ -211,8 +208,7 @@ Deno.test("HTTP errors retain status and release the body even when cancellation
 });
 
 Deno.test("method preserves validated input and orders extra handles before optional resource output", async () => {
-  const test = createModelTestContext({ globalArgs: ctx.globalArgs });
-  const context = test.context as unknown as Context;
+  const context = testContext(ctx.globalArgs);
   const args = z.object({
     value: z.string().transform((value) => value.length),
   });
@@ -238,7 +234,7 @@ Deno.test("method preserves validated input and orders extra handles before opti
     "stdout",
     "state",
   ]);
-  assertEquals(test.getWrittenResources()[0].data, {
+  assertEquals(context.getWrittenResources()[0].data, {
     value: 5,
     handles: ["resource field"],
   });
@@ -275,7 +271,7 @@ Deno.test("method preserves validated input and orders extra handles before opti
   assertEquals(await artifacts.execute({ value: 5 }, context), {
     dataHandles: [extra],
   });
-  assertEquals(test.getWrittenResources().length, 2);
+  assertEquals(context.getWrittenResources().length, 2);
 });
 
 Deno.test("deadline checks elapsed time, propagates aborts, and clears its timer on disposal", async () => {

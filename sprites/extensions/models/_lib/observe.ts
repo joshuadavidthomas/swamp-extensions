@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: MIT
 /** Bounded filesystem and listening-port observations. @module */
 import { z } from "zod";
-import {
-  deadline,
-  decodeFrame,
-  method,
-  type Query,
-  resource,
-  sanitize,
-} from "./core.ts";
+import { deadline, decodeFrame, method, resource, sanitize } from "./core.ts";
 import {
   type Channel,
   type ConnectChannel,
@@ -45,7 +38,7 @@ const WatchOutput = z.object({
   ),
 });
 
-const WatchArgs = z.object({
+export const WatchArgs = z.object({
   paths: z.array(z.string()).min(1),
   recursive: z.boolean().default(false),
   workingDir: z.string().min(1).default("/"),
@@ -77,7 +70,7 @@ const PortWatchOutput = z.object({
     "True because observation ends at durationMs or maxEvents, not at an exhaustive event boundary.",
   ),
 });
-const PortWatchArgs = z.object({
+export const PortWatchArgs = z.object({
   durationMs: z.number().int().positive().max(2_147_483_647),
   maxEvents: z.number().int().positive().max(MAX_PORTS).default(1_000).describe(
     "Maximum incremental notifications; initial snapshot entries do not count toward this limit.",
@@ -89,14 +82,12 @@ const STOP = Symbol("observation duration elapsed");
 type Observation<F, E, T> = {
   connect: ConnectChannel;
   path: string;
-  query?: Query;
   subscribe?: string;
   first: (bytes: Uint8Array) => F;
   eventSchema: z.ZodType<E>;
   event: (value: E) => T;
   operation: string;
   cap: number;
-  byteBound: number;
   durationMs: number;
 };
 
@@ -117,7 +108,6 @@ async function observe<F, E, T>(
     channel = await options.connect(
       { ...ctx, signal },
       spritePath(ctx, options.path),
-      options.query,
     );
     check();
     if (options.subscribe !== undefined) {
@@ -129,7 +119,7 @@ async function observe<F, E, T>(
       const message = await readChannel(channel!, signal);
       if (message) {
         receivedBytes += message.bytes.length;
-        if (receivedBytes > options.byteBound) {
+        if (receivedBytes > ctx.globalArgs.maxResponseBytes) {
           throw new Error(
             `${options.operation} exceeded maxResponseBytes; no result was saved.`,
           );
@@ -150,17 +140,15 @@ async function observe<F, E, T>(
       );
     }
     const first = options.first(initial.bytes);
-    const durationDeadline = performance.now() + options.durationMs;
     const stopped = new Promise<typeof STOP>((resolve) => {
       timer = setTimeout(() => resolve(STOP), options.durationMs);
     });
     const events: T[] = [];
     while (events.length < options.cap) {
       check();
-      if (performance.now() >= durationDeadline) break;
       const next = await Promise.race([read(), stopped]);
       check();
-      if (next === STOP || performance.now() >= durationDeadline) break;
+      if (next === STOP) break;
       if (!next) {
         throw new Error(
           `${options.operation} disconnected before its bounded observation ended.`,
@@ -200,10 +188,9 @@ function watchError(message: string | undefined, token: string): Error {
 
 export async function observeWatch(
   ctx: SpriteContext,
-  input: z.input<typeof WatchArgs>,
+  args: z.output<typeof WatchArgs>,
   connect: ConnectChannel = openChannel,
 ): Promise<z.output<typeof WatchOutput>> {
-  const args = WatchArgs.parse(input);
   const result = await observe(ctx, {
     connect,
     path: "/fs/watch",
@@ -244,7 +231,6 @@ export async function observeWatch(
     },
     operation: "Filesystem watch",
     cap: args.maxEvents,
-    byteBound: ctx.globalArgs.maxResponseBytes,
     durationMs: args.durationMs,
   });
   return { events: result.events, truncated: true };
@@ -252,10 +238,9 @@ export async function observeWatch(
 
 export async function watchPorts(
   ctx: SpriteContext,
-  input: z.input<typeof PortWatchArgs>,
+  args: z.output<typeof PortWatchArgs>,
   connect: ConnectChannel = openChannel,
 ): Promise<z.output<typeof PortWatchOutput>> {
-  const args = PortWatchArgs.parse(input);
   const result = await observe(ctx, {
     connect,
     path: "/ports/watch",
@@ -269,7 +254,6 @@ export async function watchPorts(
     event: (value) => value,
     operation: "Sprite port watch",
     cap: args.maxEvents,
-    byteBound: ctx.globalArgs.maxResponseBytes,
     durationMs: args.durationMs,
   });
   return {
