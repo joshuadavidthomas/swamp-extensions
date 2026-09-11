@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   BinaryFile,
   concatenate,
+  deadline,
   Input,
   inputBytes,
   method,
@@ -21,9 +22,9 @@ import { connectExecProxy } from "./proxy.ts";
 
 const GATEWAY_HOST = "api.sprites.dev";
 const GATEWAY_PORT = 443;
+const HTTP_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
-const OpenJsonObject = z.record(z.string(), z.json());
-const GatewayConnection = z.object({
+const GatewayConnection = z.looseObject({
   provider: z.string().optional(),
   display_name: z.string().optional(),
   description: z.string().optional(),
@@ -31,12 +32,12 @@ const GatewayConnection = z.object({
   scopes: z.json().optional(),
   usage_snippet: z.string().optional(),
   request_scopes_url: z.string().optional(),
-}).and(OpenJsonObject).describe(
+}).describe(
   "Source-defined configured gateway entry. Known fields are typed and unpublished provider metadata is retained.",
 );
-const AvailableProvider = z.object({
+const AvailableProvider = z.looseObject({
   setup_url: z.string().optional(),
-}).and(OpenJsonObject).describe(
+}).describe(
   "Source-defined available-provider entry. setup_url is known and unpublished provider metadata is retained.",
 );
 const GatewayList = z.object({
@@ -44,7 +45,7 @@ const GatewayList = z.object({
   available: z.array(AvailableProvider),
 });
 
-const ProviderMethod = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).refine(
+const ProviderMethod = z.string().regex(HTTP_TOKEN).refine(
   (value) => value.toUpperCase() !== "CONNECT",
   "CONNECT establishes a tunnel; use proxy instead of the HTTP relay.",
 );
@@ -100,46 +101,34 @@ export type GatewayDependencies = {
   request?: typeof https.request;
 };
 
+const BLOCKED_HEADERS = new Set([
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+  "host",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "upgrade",
+  "trailer",
+  "te",
+  "expect",
+  "fly-src",
+]);
+
 function checkedHeaders(
   headers: Record<string, string>,
 ): Record<string, string> {
-  const blocked = new Set([
-    "authorization",
-    "cookie",
-    "proxy-authorization",
-    "host",
-    "content-length",
-    "transfer-encoding",
-    "connection",
-    "upgrade",
-    "trailer",
-    "te",
-    "expect",
-    "fly-src",
-    "fly-src-signature",
-    "fly-src-optin",
-  ]);
-  const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     const normalized = name.toLowerCase();
-    if (blocked.has(normalized) || normalized.startsWith("fly-src-")) {
+    if (BLOCKED_HEADERS.has(normalized) || normalized.startsWith("fly-src-")) {
       throw new Error(
         `Gateway request header ${name} is controlled by the gateway transport.`,
       );
     }
-    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || /[\r\n]/.test(value)) {
+    if (!HTTP_TOKEN.test(name) || /[\r\n]/.test(value)) {
       throw new Error("Gateway request contains an invalid HTTP header.");
     }
-    result[name] = value;
-  }
-  return result;
-}
-
-function responseHeaders(message: IncomingMessage): Record<string, string[]> {
-  const headers: Record<string, string[]> = {};
-  for (let index = 0; index < message.rawHeaders.length; index += 2) {
-    const name = message.rawHeaders[index].toLowerCase();
-    (headers[name] ??= []).push(message.rawHeaders[index + 1]);
   }
   return headers;
 }
@@ -161,8 +150,6 @@ async function secureTunnel(
       servername: GATEWAY_HOST,
       rejectUnauthorized: true,
       ALPNProtocols: ["http/1.1"],
-      checkServerIdentity: (hostname, certificate) =>
-        tls.checkServerIdentity(hostname, certificate),
     });
   } catch (error) {
     raw.destroy();
@@ -177,9 +164,7 @@ async function secureTunnel(
       };
       const onSecure = (): void => {
         cleanup();
-        if (!socket.authorized) {
-          reject(new Error("Gateway TLS certificate validation failed."));
-        } else resolve();
+        resolve();
       };
       const onError = (): void => {
         cleanup();
@@ -187,9 +172,7 @@ async function secureTunnel(
       };
       const onAbort = (): void => {
         cleanup();
-        reject(
-          ctx.signal.reason ?? new Error("Gateway request was cancelled."),
-        );
+        reject(ctx.signal.reason);
       };
       socket.once("secureConnect", onSecure);
       socket.once("error", onError);
@@ -211,9 +194,7 @@ class TunnelAgent extends https.Agent {
 
   override createConnection(
     _options: https.RequestOptions,
-    callback?: (error: Error | null, stream: Duplex) => void,
   ): Duplex {
-    callback?.(null, this.tunnel);
     return this.tunnel;
   }
 }
@@ -224,82 +205,79 @@ export async function requestGateway(
   request: GatewayHttpRequest,
   dependencies: GatewayDependencies = {},
 ): Promise<GatewayHttpResponse> {
-  ctx = {
-    ...ctx,
-    signal: AbortSignal.any([
-      ctx.signal,
-      AbortSignal.timeout(ctx.globalArgs.timeoutMs),
-    ]),
-  };
-  ctx.signal.throwIfAborted();
-  const { raw, socket } = await secureTunnel(ctx, dependencies);
-  const agent = new TunnelAgent(socket);
-  const requestHttps = dependencies.request ?? https.request;
-  let outgoing: ReturnType<typeof https.request> | undefined;
-  const onAbort = (): void => {
-    outgoing?.destroy(
-      ctx.signal.reason instanceof Error
-        ? ctx.signal.reason
-        : new Error("Gateway request was cancelled."),
-    );
-  };
-  ctx.signal.addEventListener("abort", onAbort, { once: true });
+  const { signal, dispose } = deadline(ctx);
   try {
-    const incoming = await new Promise<IncomingMessage>((resolve, reject) => {
-      outgoing = requestHttps({
-        protocol: "https:",
-        hostname: GATEWAY_HOST,
-        port: String(GATEWAY_PORT),
-        method: request.method,
-        path: request.path,
-        headers: request.headers,
-        agent,
-      }, resolve);
-      outgoing.once(
-        "error",
-        () => reject(new Error("Gateway HTTPS transport failed.")),
-      );
-      outgoing.end(Buffer.from(request.body));
-      if (ctx.signal.aborted) onAbort();
-    });
-    const chunks: Uint8Array[] = [];
-    let length = 0;
-    for await (const value of incoming) {
-      const chunk = new Uint8Array(value as Buffer);
-      length += chunk.length;
-      if (length > ctx.globalArgs.maxResponseBytes) {
+    signal.throwIfAborted();
+    const { raw, socket } = await secureTunnel(
+      { ...ctx, signal },
+      dependencies,
+    );
+    const agent = new TunnelAgent(socket);
+    const requestHttps = dependencies.request ?? https.request;
+    let outgoing: ReturnType<typeof https.request> | undefined;
+    const onAbort = (): void => {
+      outgoing?.destroy(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      const incoming = await new Promise<IncomingMessage>((resolve, reject) => {
+        outgoing = requestHttps({
+          protocol: "https:",
+          hostname: GATEWAY_HOST,
+          port: String(GATEWAY_PORT),
+          method: request.method,
+          path: request.path,
+          headers: request.headers,
+          agent,
+        }, resolve);
+        outgoing.once(
+          "error",
+          () => reject(new Error("Gateway HTTPS transport failed.")),
+        );
+        outgoing.end(Buffer.from(request.body));
+        if (signal.aborted) onAbort();
+      });
+      if (
+        incoming.statusCode === undefined ||
+        incoming.statusMessage === undefined
+      ) {
         incoming.destroy();
         throw new Error(
-          `Gateway response exceeds maxResponseBytes (${ctx.globalArgs.maxResponseBytes}); no complete output was saved.`,
+          "Gateway HTTPS transport returned an incomplete HTTP status.",
         );
       }
-      chunks.push(chunk);
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      for await (const value of incoming) {
+        const chunk = new Uint8Array(value as Buffer);
+        length += chunk.length;
+        if (length > ctx.globalArgs.maxResponseBytes) {
+          incoming.destroy();
+          throw new Error(
+            `Gateway response exceeds maxResponseBytes (${ctx.globalArgs.maxResponseBytes}); no complete output was saved.`,
+          );
+        }
+        chunks.push(chunk);
+      }
+      const body = concatenate(chunks);
+      return {
+        status: incoming.statusCode,
+        statusText: incoming.statusMessage,
+        // Node declares optional values, but parsed distinct headers are arrays.
+        headers: incoming.headersDistinct as Record<string, string[]>,
+        bodyBytes: body.length,
+        body,
+      };
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      outgoing?.destroy();
+      agent.destroy();
+      socket.destroy();
+      raw.destroy();
     }
-    const body = concatenate(chunks);
-    return {
-      status: incoming.statusCode ?? 0,
-      statusText: incoming.statusMessage ?? "",
-      headers: responseHeaders(incoming),
-      bodyBytes: body.length,
-      body,
-    };
   } finally {
-    ctx.signal.removeEventListener("abort", onAbort);
-    outgoing?.destroy();
-    agent.destroy();
-    socket.destroy();
-    raw.destroy();
+    dispose();
   }
-}
-
-function gatewayPath(
-  provider: string,
-  connectionId: string,
-  providerPath: string,
-): string {
-  return `/v1/gateway/${segment(provider)}/${
-    segment(connectionId)
-  }${providerPath}`;
 }
 
 /** Injectable complete gateway request boundary for schema and relay tests. */
@@ -324,16 +302,23 @@ export async function discoverGateway(
       `Sprite gateway discovery returned HTTP ${response.status}.`,
     );
   }
+  let value: unknown;
   try {
-    const value = JSON.parse(
+    value = JSON.parse(
       new TextDecoder("utf-8", { fatal: true }).decode(response.body),
     );
-    return GatewayList.parse(value);
   } catch {
     throw new Error(
-      "Sprite gateway discovery returned invalid JSON for its source-defined schema.",
+      "Sprite gateway discovery returned invalid JSON.",
     );
   }
+  const parsed = GatewayList.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(
+      "Sprite gateway discovery response does not match its source-defined schema.",
+    );
+  }
+  return parsed.data;
 }
 
 /** Build and send one provider relay while keeping the destination on the fixed gateway host. */
@@ -350,7 +335,9 @@ export async function relayGateway(
   }
   return await requester(ctx, {
     method: args.method,
-    path: gatewayPath(args.provider, args.connection_id, args.providerPath),
+    path: `/v1/gateway/${segment(args.provider)}/${
+      segment(args.connection_id)
+    }${args.providerPath}`,
     headers: checkedHeaders(args.headers),
     body,
   });

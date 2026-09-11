@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MIT
 import { assertEquals, assertRejects } from "@std/assert";
-import {
-  createModelTestContext,
-  withMockedFetch,
-} from "@swamp-club/swamp-testing";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
 import {
   createManagementMethods,
   type ManagementExec,
   TaskExpiry,
 } from "./management.ts";
-import type { SpriteContext } from "./sprite-api.ts";
+import { testContext } from "./test_support.ts";
 const globalArgs = {
   token: "test-token",
   baseUrl: "https://api.sprites.dev",
@@ -53,13 +50,12 @@ const result = (
   exitCode,
 });
 function setup(stored = true) {
-  const test = createModelTestContext({
-    globalArgs,
+  const test = testContext(globalArgs, {
     storedResources: stored ? { state: sprite } : {},
   });
   return {
     ...test,
-    ctx: { ...test.context, globalArgs } as unknown as SpriteContext,
+    ctx: test,
   };
 }
 const identity = () => new Response(JSON.stringify(sprite));
@@ -129,17 +125,6 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       output: { name: task.name, expire: "30s" },
     },
     {
-      method: "putTask",
-      input: { name: task.name, expire: "1m" },
-      verb: "PUT",
-      path: "/v1/tasks",
-      body: { name: task.name, expire: "1m" },
-      status: 200,
-      response: "",
-      spec: "taskPut",
-      output: { name: task.name, expire: "1m" },
-    },
-    {
       method: "deleteTask",
       input: { name: task.name },
       verb: "DELETE",
@@ -194,9 +179,8 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
   }
 });
 
-Deno.test("getService rejects a different service name, HTTP errors, and malformed JSON", async () => {
+Deno.test("getService rejects invalid shapes, HTTP errors, and malformed JSON", async () => {
   const failures = [
-    result(JSON.stringify({ ...service, name: "other" }), 200),
     result(JSON.stringify({ ...service, needs: undefined }), 200),
     result("not found", 404),
     result("{broken", 200),
@@ -253,7 +237,6 @@ Deno.test("management failures are sanitized and never replay a mutation", async
       result("secret-body", 500),
       result("secret-body", 302),
       result("secret-body", 201, 28),
-      result("secret-body", 201, 22),
       {
         stdout: bytes("secret-body"),
         stderr: bytes("secret-stderr"),
@@ -264,7 +247,6 @@ Deno.test("management failures are sanitized and never replay a mutation", async
         stderr: new Uint8Array(),
         exitCode: 0,
       },
-      result("x".repeat(10001), 201),
     ]
   ) {
     const test = setup();

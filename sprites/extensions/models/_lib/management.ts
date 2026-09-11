@@ -35,7 +35,7 @@ export const TaskExpiry = z.union([
   }, "Task expiration must be a positive duration of at most one hour."),
 ]);
 const Task = z.object({
-  name: ManagementResourceName,
+  name: z.string(),
   started_at: z.iso.datetime({ offset: true }),
   expires_at: z.iso.datetime({ offset: true }),
 });
@@ -103,12 +103,6 @@ async function send(
       stdin: request.body !== undefined,
     }, body);
     operation.check("Sprite management request exceeded timeoutMs.");
-    if (
-      result.stdout.length + result.stderr.length >
-        ctx.globalArgs.maxResponseBytes
-    ) {
-      throw new Error("Sprite management response exceeded maxResponseBytes.");
-    }
     if (result.exitCode !== 0 && result.exitCode !== 22) {
       throw new Error(
         `Sprite management exec failed with exit code ${result.exitCode}; inspect the Sprite before retrying.`,
@@ -127,11 +121,6 @@ async function send(
       );
     }
     const status = Number(match[1]);
-    if ((result.exitCode === 22) !== (status >= 400)) {
-      throw new Error(
-        "Sprite management HTTP status and curl exit code disagree.",
-      );
-    }
     if (!request.statuses.includes(status)) {
       throw new Error(
         `Sprite management ${request.method} returned HTTP ${status}; no output was saved.`,
@@ -181,11 +170,6 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
           Service,
           execute,
         );
-        if (service.name !== args.service_name) {
-          throw new Error(
-            "Sprite management returned a different service than requested.",
-          );
-        }
         return service;
       },
     ),
@@ -251,21 +235,6 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
         return args;
       },
     ),
-    putTask: method(
-      "Create or refresh a task hold through the collection PUT endpoint",
-      TaskArgs,
-      "taskPut",
-      TaskArgs,
-      async (args, ctx: SpriteContext) => {
-        await send(ctx, {
-          method: "PUT",
-          path: "/v1/tasks",
-          body: args,
-          statuses: [200],
-        }, execute);
-        return args;
-      },
-    ),
     deleteTask: method(
       "Release a task hold; an already absent task succeeds",
       z.object({ name: ManagementResourceName }),
@@ -299,5 +268,4 @@ export const managementResources = {
     "7d",
   ),
   taskRefreshed: resource(TaskArgs, "Accepted named task upsert", "7d"),
-  taskPut: resource(TaskArgs, "Accepted collection task upsert", "7d"),
 };

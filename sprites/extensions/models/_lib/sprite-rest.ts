@@ -16,6 +16,7 @@ import {
   resource,
   responseBytes,
   segment,
+  withHandles,
 } from "./core.ts";
 import {
   type SpriteContext,
@@ -26,7 +27,6 @@ import {
 
 const Empty = z.object({});
 const UrlProbe = z.object({
-  status: z.literal(200),
   bodyBytes: z.number().int().nonnegative(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
 });
@@ -182,14 +182,14 @@ const Services = z.object({
 const ServiceEvents = z.object({
   events: z.array(ServiceEvent),
   truncated: z.boolean().describe(
-    "True for a requested log tail or timed log observation; false for completed operation progress.",
+    "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
   ),
 });
 
-const WorkingPath = z.object({
-  path: z.string().min(1),
+const WorkingDir = z.object({
   workingDir: z.string().min(1).default("/"),
 });
+const WorkingPath = WorkingDir.extend({ path: z.string().min(1) });
 const FsEntry = z.object({
   name: z.string(),
   path: z.string(),
@@ -234,7 +234,6 @@ const FsChown = z.object({
   count: z.number().int().nonnegative(),
 });
 const CommonMutation = z.object({
-  workingDir: z.string().min(1).default("/"),
   recursive: z.boolean().default(false),
   asRoot: z.boolean().default(false),
 });
@@ -261,16 +260,15 @@ function requireComplete<T extends { type: string }>(
 }
 async function checkpointStream(
   ctx: SpriteContext,
-  methodName: string,
   path: string,
   json?: unknown,
 ): Promise<z.input<typeof CheckpointEvents>> {
   const events = await ndjson(
     ctx,
-    methodName,
+    "POST",
     path,
     CheckpointEvent,
-    json === undefined ? {} : { json },
+    { json },
   );
   return { events: requireComplete(events, path) };
 }
@@ -278,13 +276,18 @@ async function serviceStream(
   ctx: SpriteContext,
   methodName: string,
   path: string,
-  options: NonNullable<Parameters<typeof ndjson>[4]> = {},
-  starting = false,
+  options: NonNullable<Parameters<typeof ndjson>[4]>,
+  kind: "startup" | "logs" | "progress",
 ): Promise<z.input<typeof ServiceEvents>> {
   const events = await ndjson(ctx, methodName, path, ServiceEvent, options);
-  if (starting) {
-    const exited = events.find((event) => event.type === "exit");
-    if (exited?.type === "exit") {
+  if (kind === "startup") {
+    const exited = events.find(
+      (
+        event,
+      ): event is Extract<z.output<typeof ServiceEvent>, { type: "exit" }> =>
+        event.type === "exit",
+    );
+    if (exited) {
       throw new Error(
         `Sprite service exited during startup with code ${exited.exit_code}; inspect its service logs before retrying.`,
       );
@@ -292,7 +295,7 @@ async function serviceStream(
   }
   return {
     events: requireComplete(events, path),
-    truncated: path.endsWith("/logs"),
+    truncated: kind === "logs",
   };
 }
 /** JSON resources emitted by REST methods. Provider field names remain unchanged. */
@@ -428,7 +431,6 @@ export const restMethods = {
         );
         const digest = createHash("sha256").update(bytes).digest("hex");
         return {
-          status: 200 as const,
           bodyBytes: bytes.length,
           sha256: digest,
         };
@@ -467,7 +469,6 @@ export const restMethods = {
       await verifySprite(ctx);
       return await checkpointStream(
         ctx,
-        "POST",
         spritePath(ctx, "/checkpoint"),
         args,
       );
@@ -509,7 +510,6 @@ export const restMethods = {
       await verifySprite(ctx);
       return await checkpointStream(
         ctx,
-        "POST",
         `${checkpointPath(ctx, args.checkpoint_id)}/restore`,
       );
     },
@@ -636,7 +636,7 @@ export const restMethods = {
         "PUT",
         servicePath(ctx, args.service_name),
         { query: { duration: args.duration }, json: args.service },
-        true,
+        "startup",
       );
     },
   ),
@@ -655,6 +655,7 @@ export const restMethods = {
         "GET",
         servicePath(ctx, args.service_name, "/logs"),
         { query: { lines: args.lines, duration: args.duration } },
+        "logs",
       ),
   ),
   startService: method(
@@ -672,7 +673,7 @@ export const restMethods = {
         "POST",
         servicePath(ctx, args.service_name, "/start"),
         { query: { duration: args.duration } },
-        true,
+        "startup",
       );
     },
   ),
@@ -691,6 +692,7 @@ export const restMethods = {
         "POST",
         servicePath(ctx, args.service_name, "/stop"),
         { query: { timeout: args.timeout } },
+        "progress",
       );
     },
   ),
@@ -709,7 +711,7 @@ export const restMethods = {
         "POST",
         servicePath(ctx, args.service_name, "/restart"),
         { query: { duration: args.duration } },
-        true,
+        "startup",
       );
     },
   ),
@@ -736,15 +738,11 @@ export const restMethods = {
         query: args,
       }),
   ),
-  readFile: {
-    description: "Read raw bytes from a Sprite file",
-    arguments: WorkingPath,
-    execute: async (
-      input: z.output<typeof WorkingPath>,
-      ctx: SpriteContext,
-    ) => {
-      const args = WorkingPath.parse(input);
-      ctx.logger.info("Reading Sprite file");
+  readFile: method(
+    "Read raw bytes from a Sprite file",
+    WorkingPath,
+    null,
+    async (args, ctx: SpriteContext) => {
       const response = await request(ctx, "GET", fsPath(ctx, "read"), {
         query: args,
       });
@@ -752,13 +750,12 @@ export const restMethods = {
         response,
         ctx.globalArgs.maxResponseBytes,
       );
-      ctx.signal.throwIfAborted();
       const handle = await ctx.createFileWriter("contents", "contents")
         .writeAll(bytes);
       ctx.logger.info("Read Sprite file", { bytes: bytes.length });
-      return { dataHandles: [handle] };
+      return withHandles(undefined, [handle]);
     },
-  },
+  ),
   writeFile: method(
     "Write raw bytes to a Sprite file",
     WorkingPath.extend({
@@ -802,7 +799,7 @@ export const restMethods = {
       source: z.string().min(1),
       dest: z.string().min(1),
       preserveAttrs: z.boolean().default(false),
-    }).merge(CommonMutation),
+    }).extend(WorkingDir.shape).merge(CommonMutation),
     "fileCopied",
     FsCopy,
     async (args, ctx: SpriteContext) => {
@@ -817,9 +814,9 @@ export const restMethods = {
     z.object({
       source: z.string().min(1),
       dest: z.string().min(1),
-      workingDir: z.string().min(1).default("/"),
-      asRoot: z.boolean().default(false),
-    }),
+    }).extend(WorkingDir.shape).extend(
+      CommonMutation.omit({ recursive: true }).shape,
+    ),
     "fileRenamed",
     FsRename,
     async (args, ctx: SpriteContext) => {

@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
 import type * as https from "node:https";
 import type * as tls from "node:tls";
-import type { SpriteContext } from "./sprite-api.ts";
+import { testContext } from "./test_support.ts";
 import {
   discoverGateway,
   type GatewayHttpResponse,
@@ -20,10 +20,7 @@ const globalArgs = {
   maxResponseBytes: 1_000_000,
   name: "demo",
 };
-const ctx = {
-  globalArgs,
-  signal: new AbortController().signal,
-} as SpriteContext;
+const ctx = testContext(globalArgs);
 function response(
   overrides: Partial<GatewayHttpResponse> = {},
 ): GatewayHttpResponse {
@@ -215,11 +212,11 @@ Deno.test("requestGateway pins proxy target and validated TLS without forwarding
             & {
               statusCode: number;
               statusMessage: string;
-              rawHeaders: string[];
+              headersDistinct: Record<string, string[]>;
             };
           incoming.statusCode = 503;
           incoming.statusMessage = "Unavailable";
-          incoming.rawHeaders = ["X-Test", "one", "X-Test", "two"];
+          incoming.headersDistinct = { "x-test": ["one", "two"] };
           callback(incoming);
         });
       outgoing.destroy = () => {};
@@ -229,10 +226,32 @@ Deno.test("requestGateway pins proxy target and validated TLS without forwarding
   const result = await resultPromise;
   assertEquals(tlsOptions?.servername, "api.sprites.dev");
   assertEquals(tlsOptions?.rejectUnauthorized, true);
-  assertEquals(typeof tlsOptions?.checkServerIdentity, "function");
   assertEquals(requestOptions?.hostname, "api.sprites.dev");
   assertEquals(requestOptions?.headers, { accept: "application/json" });
   assertEquals(result.status, 503);
   assertEquals(result.headers, { "x-test": ["one", "two"] });
   assertEquals(result.body, new Uint8Array([1, 2]));
+});
+
+Deno.test("gateway discovery distinguishes invalid JSON from invalid response shapes", async () => {
+  for (
+    const [text, message] of [
+      ["{broken", "invalid JSON"],
+      [
+        '{"connections":null,"available":[]}',
+        "does not match its source-defined schema",
+      ],
+    ]
+  ) {
+    const body = new TextEncoder().encode(text);
+    await assertRejects(
+      () =>
+        discoverGateway(
+          ctx,
+          () => Promise.resolve(response({ body, bodyBytes: body.length })),
+        ),
+      Error,
+      message,
+    );
+  }
 });

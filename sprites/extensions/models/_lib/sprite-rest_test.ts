@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import {
-  createModelTestContext,
-  withMockedFetch,
-} from "@swamp-club/swamp-testing";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
 import { restMethods } from "./sprite-rest.ts";
 
-type SpriteContext = unknown;
+import type { SpriteContext } from "./sprite-api.ts";
+import { testContext } from "./test_support.ts";
 
 const globalArgs = {
   token: "test-token",
@@ -77,13 +75,10 @@ function runnable(name: keyof typeof restMethods): Runnable {
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { "content-type": "application/json" },
   });
 }
 function ndjson(value: string): Response {
-  return new Response(value, {
-    headers: { "content-type": "application/x-ndjson" },
-  });
+  return new Response(value, {});
 }
 function noContent(): Response {
   return new Response(null, { status: 204 });
@@ -96,7 +91,7 @@ const routeCases: Array<{
   path: string;
   response: Response;
   verifies?: boolean;
-  output: string | undefined;
+  output?: string;
 }> = [
   {
     name: "create",
@@ -130,7 +125,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/upgrade",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "delete",
@@ -139,7 +133,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "createCheckpoint",
@@ -190,7 +183,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/network",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "getPrivilegesPolicy",
@@ -211,7 +203,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/privileges",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "deletePrivilegesPolicy",
@@ -220,7 +211,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/privileges",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "getResourcesPolicy",
@@ -237,7 +227,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/resources",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "deleteResourcesPolicy",
@@ -246,7 +235,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/resources",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "listServices",
@@ -312,7 +300,6 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/services/web%2FAPI",
     response: noContent(),
     verifies: true,
-    output: undefined,
   },
   {
     name: "listFiles",
@@ -414,8 +401,7 @@ const routeCases: Array<{
 
 Deno.test("every JSON and NDJSON REST method uses its provider route and writes validated output", async () => {
   for (const testCase of routeCases) {
-    const { context, getWrittenResources } = createModelTestContext({
-      globalArgs,
+    const context = testContext(globalArgs, {
       storedResources: { state: sprite },
     });
     const responses = testCase.verifies
@@ -423,12 +409,7 @@ Deno.test("every JSON and NDJSON REST method uses its provider route and writes 
       : [testCase.response];
     const { calls } = await withMockedFetch(
       responses,
-      () =>
-        runnable(testCase.name).execute(testCase.args, {
-          ...context,
-          globalArgs,
-          deleteResource: async () => {},
-        } as SpriteContext),
+      () => runnable(testCase.name).execute(testCase.args, context),
     );
     const target = calls.at(-1);
     assertEquals(target?.method, testCase.httpMethod, testCase.name);
@@ -451,7 +432,7 @@ Deno.test("every JSON and NDJSON REST method uses its provider route and writes 
       );
     }
     assertEquals(
-      getWrittenResources().at(-1)?.specName,
+      context.getWrittenResources().at(-1)?.specName,
       testCase.output,
       testCase.name,
     );
@@ -459,24 +440,18 @@ Deno.test("every JSON and NDJSON REST method uses its provider route and writes 
 });
 
 Deno.test("upgrade sends a bodyless request", async () => {
-  const test = createModelTestContext({
-    globalArgs,
+  const test = testContext(globalArgs, {
     storedResources: { state: sprite },
   });
   const { calls } = await withMockedFetch(
     [json(sprite), noContent()],
-    () =>
-      runnable("upgrade").execute({}, {
-        ...test.context,
-        globalArgs,
-      }),
+    () => runnable("upgrade").execute({}, test),
   );
   assertEquals(calls[1].body, "");
 });
 
 Deno.test("upgrade sends the explicitly requested version", async () => {
-  const test = createModelTestContext({
-    globalArgs,
+  const test = testContext(globalArgs, {
     storedResources: { state: sprite },
   });
   let body: unknown;
@@ -486,29 +461,20 @@ Deno.test("upgrade sends the explicitly requested version", async () => {
       body = await request.json();
       return noContent();
     },
-    () =>
-      runnable("upgrade").execute({ version: "0.0.1-rc48" }, {
-        ...test.context,
-        globalArgs,
-      }),
+    () => runnable("upgrade").execute({ version: "0.0.1-rc48" }, test),
   );
   assertEquals(body, { version: "0.0.1-rc48" });
 });
 
 Deno.test("upgrade API errors write no acknowledgement", async () => {
-  const test = createModelTestContext({
-    globalArgs,
+  const test = testContext(globalArgs, {
     storedResources: { state: sprite },
   });
   await assertRejects(
     () =>
       withMockedFetch(
         [json(sprite), json({ error: "upgrade unavailable" }, 503)],
-        () =>
-          runnable("upgrade").execute({}, {
-            ...test.context,
-            globalArgs,
-          }),
+        () => runnable("upgrade").execute({}, test),
       ),
     Error,
   );
@@ -516,8 +482,7 @@ Deno.test("upgrade API errors write no acknowledgement", async () => {
 });
 
 Deno.test("restart verifies identity, sends no body, and treats any success body as acceptance", async () => {
-  const test = createModelTestContext({
-    globalArgs,
+  const test = testContext(globalArgs, {
     storedResources: { state: sprite },
   });
   const { calls } = await withMockedFetch(
@@ -525,11 +490,7 @@ Deno.test("restart verifies identity, sends no body, and treats any success body
       json(sprite),
       new Response("not SDK restart metadata", { status: 202 }),
     ],
-    () =>
-      runnable("restart").execute({}, {
-        ...test.context,
-        globalArgs,
-      }),
+    () => runnable("restart").execute({}, test),
   );
   assertEquals(calls.length, 2);
   assertEquals(calls[0].method, "GET");
@@ -542,19 +503,14 @@ Deno.test("restart verifies identity, sends no body, and treats any success body
 });
 
 Deno.test("restart propagates failure without retrying", async () => {
-  const test = createModelTestContext({
-    globalArgs,
+  const test = testContext(globalArgs, {
     storedResources: { state: sprite },
   });
   const { calls } = await withMockedFetch(
     [json(sprite), json({ error: "restart unavailable" }, 503)],
     () =>
       assertRejects(
-        () =>
-          runnable("restart").execute({}, {
-            ...test.context,
-            globalArgs,
-          }),
+        () => runnable("restart").execute({}, test),
         Error,
       ),
   );
@@ -567,19 +523,14 @@ Deno.test("restart refuses missing and replaced identities before POST", async (
     { ...sprite, id: "old-id" },
   ];
   for (const stored of identities) {
-    const test = createModelTestContext({
-      globalArgs,
+    const test = testContext(globalArgs, {
       storedResources: stored ? { state: stored } : {},
     });
     const { calls } = await withMockedFetch(
       [json(sprite)],
       () =>
         assertRejects(
-          () =>
-            runnable("restart").execute({}, {
-              ...test.context,
-              globalArgs,
-            }),
+          () => runnable("restart").execute({}, test),
           Error,
         ),
     );
@@ -595,8 +546,7 @@ Deno.test("probeUrl verifies identity then fingerprints only the provider root b
     name: "worker",
     url: "https://worker-a1.sprites.app/",
   };
-  const test = createModelTestContext({
-    globalArgs: probeGlobals,
+  const test = testContext(probeGlobals, {
     storedResources: { state },
   });
   const { calls } = await withMockedFetch(
@@ -605,11 +555,7 @@ Deno.test("probeUrl verifies identity then fingerprints only the provider root b
       assertEquals(request.redirect, "error");
       return new Response("hello");
     },
-    () =>
-      runnable("probeUrl").execute({}, {
-        ...test.context,
-        globalArgs: probeGlobals,
-      }),
+    () => runnable("probeUrl").execute({}, test),
   );
   assertEquals(calls.length, 2);
   assertEquals(calls[0].url, "https://api.sprites.dev/v1/sprites/worker");
@@ -619,7 +565,6 @@ Deno.test("probeUrl verifies identity then fingerprints only the provider root b
   assertEquals(calls[1].headers, { authorization: "Bearer test-token" });
   assertEquals(calls[1].body, "");
   assertEquals(test.getWrittenResources()[0].data, {
-    status: 200,
     bodyBytes: 5,
     sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
   });
@@ -637,19 +582,14 @@ Deno.test("probeUrl refuses missing and replaced identities before the URL reque
     { ...state, id: "old-id" },
   ];
   for (const stored of identities) {
-    const test = createModelTestContext({
-      globalArgs: probeGlobals,
+    const test = testContext(probeGlobals, {
       storedResources: stored ? { state: stored } : {},
     });
     const { calls } = await withMockedFetch(
       [json(state)],
       () =>
         assertRejects(
-          () =>
-            runnable("probeUrl").execute({}, {
-              ...test.context,
-              globalArgs: probeGlobals,
-            }),
+          () => runnable("probeUrl").execute({}, test),
           Error,
         ),
     );
@@ -672,19 +612,14 @@ Deno.test("probeUrl rejects non-provider root URLs before an application request
   ];
   for (const url of invalidUrls) {
     const state = { ...sprite, name: "worker", url };
-    const test = createModelTestContext({
-      globalArgs: probeGlobals,
+    const test = testContext(probeGlobals, {
       storedResources: { state },
     });
     const { calls } = await withMockedFetch(
       [json(state)],
       () =>
         assertRejects(
-          () =>
-            runnable("probeUrl").execute({}, {
-              ...test.context,
-              globalArgs: probeGlobals,
-            }),
+          () => runnable("probeUrl").execute({}, test),
           Error,
         ),
     );
@@ -710,19 +645,14 @@ Deno.test("probeUrl enforces response size and saves no failed status", async ()
       new Response("no", { status: 503 }),
     ]
   ) {
-    const test = createModelTestContext({
-      globalArgs: probeGlobals,
+    const test = testContext(probeGlobals, {
       storedResources: { state },
     });
     await assertRejects(
       () =>
         withMockedFetch(
           [json(state), response],
-          () =>
-            runnable("probeUrl").execute({}, {
-              ...test.context,
-              globalArgs: probeGlobals,
-            }),
+          () => runnable("probeUrl").execute({}, test),
         ),
       Error,
     );
@@ -742,8 +672,7 @@ Deno.test("probeUrl cancels a non-200 body", async () => {
       cancelled = true;
     },
   });
-  const test = createModelTestContext({
-    globalArgs: probeGlobals,
+  const test = testContext(probeGlobals, {
     storedResources: { state },
   });
   await assertRejects(
@@ -753,11 +682,7 @@ Deno.test("probeUrl cancels a non-200 body", async () => {
           request.url.includes("api.sprites.dev")
             ? json(state)
             : new Response(body, { status: 503 }),
-        () =>
-          runnable("probeUrl").execute({}, {
-            ...test.context,
-            globalArgs: probeGlobals,
-          }),
+        () => runnable("probeUrl").execute({}, test),
       ),
     Error,
   );
@@ -773,8 +698,7 @@ Deno.test("probeUrl honors an aborted operation and writes nothing", async () =>
   };
   const controller = new AbortController();
   controller.abort();
-  const test = createModelTestContext({
-    globalArgs: probeGlobals,
+  const test = testContext(probeGlobals, {
     storedResources: { state },
   });
   await assertRejects(
@@ -783,7 +707,7 @@ Deno.test("probeUrl honors an aborted operation and writes nothing", async () =>
         [json(state), new Response("hello")],
         () =>
           runnable("probeUrl").execute({}, {
-            ...test.context,
+            ...test,
             globalArgs: probeGlobals,
             signal: controller.signal,
           }),
@@ -793,7 +717,7 @@ Deno.test("probeUrl honors an aborted operation and writes nothing", async () =>
 });
 
 Deno.test("create binds the global name and sends every supported option in provider spelling", async () => {
-  const { context } = createModelTestContext({ globalArgs });
+  const context = testContext(globalArgs);
   const { calls } = await withMockedFetch(
     [json(sprite, 201)],
     () =>
@@ -804,7 +728,7 @@ Deno.test("create binds the global name and sends every supported option in prov
         labels: ["ci"],
         wait_for_capacity: true,
         runtime: "dev",
-      }, { ...context, globalArgs } as SpriteContext),
+      }, { ...context, globalArgs }),
   );
   assertEquals(JSON.parse(calls[0].body ?? "null"), {
     name: "demo sprite",
@@ -818,15 +742,15 @@ Deno.test("create binds the global name and sends every supported option in prov
 });
 
 Deno.test("filesystem requests preserve binary bytes and DELETE uses a JSON body", async () => {
-  const readContext = createModelTestContext({ globalArgs });
+  const readContext = testContext(globalArgs);
   const bytes = new Uint8Array([0, 255, 1, 128]);
   const readResult = await withMockedFetch(
     [new Response(bytes)],
     () =>
-      runnable("readFile").execute({ path: "raw.bin", workingDir: "/data" }, {
-        ...readContext.context,
-        globalArgs,
-      } as SpriteContext),
+      runnable("readFile").execute(
+        { path: "raw.bin", workingDir: "/data" },
+        readContext,
+      ),
   );
   assertEquals(
     readResult.calls[0].url,
@@ -834,8 +758,7 @@ Deno.test("filesystem requests preserve binary bytes and DELETE uses a JSON body
   );
   assertEquals(readContext.getWrittenFiles().length, 1);
 
-  const deleteContext = createModelTestContext({
-    globalArgs,
+  const deleteContext = testContext(globalArgs, {
     storedResources: { state: sprite },
   });
   const deleted = await withMockedFetch(
@@ -846,10 +769,7 @@ Deno.test("filesystem requests preserve binary bytes and DELETE uses a JSON body
         workingDir: "/data",
         recursive: false,
         asRoot: true,
-      }, {
-        ...deleteContext.context,
-        globalArgs,
-      } as SpriteContext),
+      }, deleteContext),
   );
   assertEquals(JSON.parse(deleted.calls[1].body ?? "null"), {
     path: "raw.bin",
@@ -867,8 +787,7 @@ Deno.test("NDJSON rejects provider errors, malformed events, and incomplete stre
       "{broken}\n",
     ]
   ) {
-    const { context } = createModelTestContext({
-      globalArgs,
+    const context = testContext(globalArgs, {
       storedResources: { state: sprite },
     });
     await assertRejects(
@@ -878,16 +797,14 @@ Deno.test("NDJSON rejects provider errors, malformed events, and incomplete stre
           () =>
             runnable("createCheckpoint").execute(
               {},
-              { ...context, globalArgs } as SpriteContext,
+              { ...context, globalArgs },
             ),
         ),
       Error,
     );
   }
 
-  const { context } = createModelTestContext({
-    globalArgs,
-  });
+  const context = testContext(globalArgs);
   const error = await assertRejects(
     () =>
       withMockedFetch(
@@ -895,7 +812,7 @@ Deno.test("NDJSON rejects provider errors, malformed events, and incomplete stre
         () =>
           runnable("getServiceLogs").execute(
             { service_name: "web/API" },
-            { ...context, globalArgs } as SpriteContext,
+            { ...context, globalArgs },
           ),
       ),
     Error,
@@ -909,8 +826,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
   ) {
     for (const code of [0, 1, 137]) {
       for (const complete of ["", '{"type":"complete","timestamp":3}\n']) {
-        const test = createModelTestContext({
-          globalArgs,
+        const test = testContext(globalArgs, {
           storedResources: { state: sprite },
         });
         const events =
@@ -922,10 +838,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
               () =>
                 runnable(name).execute(
                   { service_name: service.name, service },
-                  {
-                    ...test.context,
-                    globalArgs,
-                  },
+                  test,
                 ),
             ),
           Error,
@@ -937,8 +850,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
   for (
     const name of ["stopService", "getServiceLogs", "restartService"] as const
   ) {
-    const test = createModelTestContext({
-      globalArgs,
+    const test = testContext(globalArgs, {
       storedResources: { state: sprite },
     });
     const event = name === "getServiceLogs" ? "exit" : "stopped";
@@ -947,28 +859,17 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
       '{"type":"complete","timestamp":3}\n';
     await withMockedFetch(
       [...(name === "getServiceLogs" ? [] : [json(sprite)]), ndjson(events)],
-      () =>
-        runnable(name).execute({ service_name: service.name }, {
-          ...test.context,
-          globalArgs,
-        }),
+      () => runnable(name).execute({ service_name: service.name }, test),
     );
     assertEquals(test.getWrittenResources().length, 1);
   }
 });
 
 Deno.test("Sprite deletion treats a missing Sprite as already deleted", async () => {
-  const { context } = createModelTestContext({
-    globalArgs,
-  });
+  const context = testContext(globalArgs);
   const { calls } = await withMockedFetch(
     [json({ error: "missing" }, 404)],
-    () =>
-      runnable("delete").execute({}, {
-        ...context,
-        globalArgs,
-        deleteResource: async () => {},
-      } as SpriteContext),
+    () => runnable("delete").execute({}, context),
   );
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "GET");
