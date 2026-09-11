@@ -17,7 +17,7 @@ import {
   segment,
   withHandles,
 } from "./core.ts";
-import { type SpriteContext, verifySprite } from "./sprite-api.ts";
+import { type SpriteContext, verifySprite } from "./sprite.ts";
 import { connectExecProxy } from "./proxy.ts";
 
 const GATEWAY_HOST = "api.sprites.dev";

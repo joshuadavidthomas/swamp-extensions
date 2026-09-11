@@ -20,7 +20,7 @@ import {
   ResponseLimitError,
 } from "./_lib/core.ts";
 
-import { SpriteResponse } from "./_lib/sprite-api.ts";
+import { SpriteResponse } from "./_lib/sprite.ts";
 
 const LookupArgsSchema = z.object({
   prefix: z.string().min(1).optional().describe(

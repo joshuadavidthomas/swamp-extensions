@@ -2,6 +2,22 @@
 /** Shared HTTP, output, and method boundaries for the Sprites API. @module */
 import { z } from "zod";
 
+export const Empty = z.object({});
+export const Environment = z.record(z.string(), z.string()).meta({
+  sensitive: true,
+});
+export function requireComplete<T extends { type: string }>(
+  events: T[],
+  operation: string,
+): T[] {
+  if (!events.some((event) => event.type === "complete")) {
+    throw new Error(
+      `Sprites ${operation} progress ended without a complete event; no output was saved.`,
+    );
+  }
+  return events;
+}
+
 /** Binary input accepts text or base64; it never reads paths on the Swamp host. */
 export const Input = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string() }),

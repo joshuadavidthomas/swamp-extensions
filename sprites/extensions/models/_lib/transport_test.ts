@@ -12,10 +12,10 @@ import * as tls from "node:tls";
 import { Buffer } from "node:buffer";
 // @deno-types="npm:@types/ws@8.18.1"
 import WebSocket, { WebSocketServer } from "ws";
-import { executeHttp } from "./exec-http.ts";
+import { executeHttp } from "./exec.ts";
 import { requestGateway } from "./gateway.ts";
 import { openChannel, type SocketFactory } from "./socket.ts";
-import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
+import { SpriteArgsSchema, type SpriteContext } from "./sprite.ts";
 import { connectExecProxy, ProxyArgs, runProxy } from "./proxy.ts";
 import { testContext } from "./test_support.ts";
 

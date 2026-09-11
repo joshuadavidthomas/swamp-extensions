@@ -5,8 +5,9 @@ import {
   createManagementMethods,
   type ManagementExec,
   TaskExpiry,
-} from "./management.ts";
+} from "./local-api.ts";
 import { testContext } from "./test_support.ts";
+
 const globalArgs = {
   token: "test-token",
   baseUrl: "https://api.sprites.dev",

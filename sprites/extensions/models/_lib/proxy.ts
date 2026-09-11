@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: MIT
-/** Loopback TCP proxying over an authenticated exec relay. @module */
+/** Loopback TCP proxying over an authenticated exec relay.
+ *
+ * The API has a native /v1/sprites/{name}/proxy WebSocket: one JSON {host, port} message, then a
+ * transparent relay. It was implemented here and tested live, and neither it nor the /control proxy
+ * operation forwarded TCP half-close to the client. So this module runs a Python relay over the
+ * documented exec WebSocket instead. That is a workaround for an observed defect; re-probe the
+ * native route before building on this choice. @module */
+import * as net from "node:net";
 import { Buffer } from "node:buffer";
 import { Duplex } from "node:stream";
-import * as net from "node:net";
 import { z } from "zod";
 import {
   concatenate,
@@ -18,9 +24,14 @@ import {
   openChannel,
   readChannel,
 } from "./socket.ts";
-import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
-import { ExecControl } from "./exec.ts";
-import { decodeStreamFrame, EOF_FRAME, stdinFrame } from "./exec-http.ts";
+import { type SpriteContext, spritePath, verifySprite } from "./sprite.ts";
+import {
+  decodeStreamFrame,
+  EOF_FRAME,
+  ExecControl,
+  stdinFrame,
+} from "./exec.ts";
+
 const ACK = new TextEncoder().encode("connected\n");
 const PROGRAM = String.raw`import os,socket,sys,threading
 

@@ -13,14 +13,9 @@ import {
 } from "./core.ts";
 import { ExecArgs, ExecControl } from "./exec.ts";
 import { type Channel, type ConnectChannel, openChannel } from "./socket.ts";
-import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
-import {
-  decodeStreamFrame,
-  envPairs,
-  EOF_FRAME,
-  stdinFrame,
-} from "./exec-http.ts";
-import { initializeTerminal } from "./terminal.ts";
+import { type SpriteContext, spritePath, verifySprite } from "./sprite.ts";
+import { decodeStreamFrame, envPairs, EOF_FRAME, stdinFrame } from "./exec.ts";
+import { initializeTerminal } from "./exec.ts";
 
 const CONTROL_PREFIX = "control:";
 const CONTROL_PREFIX_BYTES = new TextEncoder().encode(CONTROL_PREFIX);

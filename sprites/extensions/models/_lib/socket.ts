@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: MIT
 /** Authenticated, cancellable WebSocket transport with bounded receive queues. @module */
-// @deno-types="npm:@types/ws@8.18.1"
 import WebSocket from "ws";
 import { Buffer } from "node:buffer";
-import { apiUrl, type Context, type Query } from "./core.ts";
+import {
+  apiUrl,
+  type Context,
+  deadline,
+  decodeFrame,
+  type Query,
+} from "./core.ts";
+import { z } from "zod";
+import { type SpriteContext, spritePath } from "./sprite.ts";
+
+// @deno-types="npm:@types/ws@8.18.1"
 
 const MAX_QUEUED_MESSAGES = 1_024;
 
@@ -217,4 +226,103 @@ export async function readChannel(
       },
     );
   });
+}
+
+const STOP = Symbol("observation duration elapsed");
+
+type Observation<F, E, T> = {
+  connect: ConnectChannel;
+  path: string;
+  subscribe?: string;
+  first: (bytes: Uint8Array) => F;
+  eventSchema: z.ZodType<E>;
+  event: (value: E) => T;
+  operation: string;
+  cap: number;
+  durationMs: number;
+};
+
+export async function observeChannel<F, E, T>(
+  ctx: SpriteContext,
+  options: Observation<F, E, T>,
+): Promise<{ first: F; events: T[] }> {
+  const budget = deadline(ctx);
+  const { signal } = budget;
+  let channel: Channel | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const check = (): void => {
+    ctx.signal.throwIfAborted();
+    budget.check(`${options.operation} exceeded timeoutMs.`);
+  };
+  try {
+    check();
+    channel = await options.connect(
+      { ...ctx, signal },
+      spritePath(ctx, options.path),
+    );
+    check();
+    if (options.subscribe !== undefined) {
+      await channel.send(options.subscribe);
+      check();
+    }
+    let receivedBytes = 0;
+    const read = async () => {
+      const message = await readChannel(channel!, signal);
+      if (message) {
+        receivedBytes += message.bytes.length;
+        if (receivedBytes > ctx.globalArgs.maxResponseBytes) {
+          throw new Error(
+            `${options.operation} exceeded maxResponseBytes; no result was saved.`,
+          );
+        }
+      }
+      return message;
+    };
+    const initial = await read();
+    check();
+    if (!initial) {
+      throw new Error(
+        `${options.operation} disconnected before its first message.`,
+      );
+    }
+    if (initial.binary) {
+      throw new Error(
+        `${options.operation} returned an unexpected binary frame.`,
+      );
+    }
+    const first = options.first(initial.bytes);
+    const stopped = new Promise<typeof STOP>((resolve) => {
+      timer = setTimeout(() => resolve(STOP), options.durationMs);
+    });
+    const events: T[] = [];
+    while (events.length < options.cap) {
+      check();
+      const next = await Promise.race([read(), stopped]);
+      check();
+      if (next === STOP) break;
+      if (!next) {
+        throw new Error(
+          `${options.operation} disconnected before its bounded observation ended.`,
+        );
+      }
+      if (next.binary) {
+        throw new Error(
+          `${options.operation} returned an unexpected binary frame.`,
+        );
+      }
+      events.push(options.event(decodeFrame(
+        next.bytes,
+        options.eventSchema,
+        `${options.operation} returned an invalid event.`,
+      )));
+    }
+    return { first, events };
+  } catch (error) {
+    check();
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    budget.dispose();
+    await channel?.close();
+  }
 }

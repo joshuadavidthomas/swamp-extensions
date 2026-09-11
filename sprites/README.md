@@ -87,6 +87,9 @@ Reference stored results in model definitions with CEL, for example
   identity. The organization token stays outside the Sprite.
 - The TCP proxy runs over an authenticated exec relay and requires
   `/.sprite/bin/python3` inside the Sprite. Sized TTY commands also require it.
+  The API's native proxy and the control-channel proxy were tested live and
+  did not forward TCP closure to the client, which is why the exec relay is
+  used.
 - Stopping a service does not prevent its startup after reboot. Delete its
   definition for that. Explicitly stopped HTTP services need `startService` to
   resume; an incoming request alone does not start them.

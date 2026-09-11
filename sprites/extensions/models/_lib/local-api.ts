@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-/** Typed local management operations reached through authenticated HTTP exec. @module */
+/** The Sprite's local management API at /.sprite/api.sock, reached with curl through authenticated exec.
+ * None of these routes appear in sprites.dev/api or docs.sprites.dev; they were verified live. @module */
 import { z } from "zod";
 import { deadline, method, resource, segment } from "./core.ts";
-import { executeHttp } from "./exec-http.ts";
-import { type SpriteContext, verifySprite } from "./sprite-api.ts";
-import { Service } from "./sprite-rest.ts";
+import { executeHttp } from "./exec.ts";
+import { type SpriteContext, verifySprite } from "./sprite.ts";
+import { Service } from "./services.ts";
 
 /** Native exec boundary; credentials stay on the outer TLS connection. */
 export type ManagementExec = typeof executeHttp;
@@ -246,9 +247,8 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
     ),
   };
 }
-export const managementMethods = createManagementMethods();
 /** Local API observations expire; stored task snapshots do not imply a continuing hold. */
-export const managementResources = {
+export const localApiResources = {
   tasks: resource(
     Tasks,
     "Observed task holds; this snapshot does not keep a Sprite awake",
@@ -266,3 +266,5 @@ export const managementResources = {
   ),
   taskRefreshed: resource(TaskArgs, "Accepted named task upsert", "7d"),
 };
+
+export const localApiMethods = createManagementMethods();

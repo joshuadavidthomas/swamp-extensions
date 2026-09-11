@@ -3,7 +3,7 @@ import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { withMockedFetch } from "@swamp-club/swamp-testing";
 import { testContext } from "./_lib/test_support.ts";
 import { model } from "./sprite.ts";
-import { type SpriteContext, spritePath } from "./_lib/sprite-api.ts";
+import { type SpriteContext, spritePath } from "./_lib/sprite.ts";
 
 const globals = model.globalArguments.parse({
   name: "worker",

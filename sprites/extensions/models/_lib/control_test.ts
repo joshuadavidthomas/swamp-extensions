@@ -17,9 +17,9 @@ import {
   saveControlExecution,
 } from "./control.ts";
 import { type Message } from "./socket.ts";
-import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
+import { SpriteArgsSchema, type SpriteContext } from "./sprite.ts";
 import { binaryFrame, FakeChannel, textFrame } from "./test_support.ts";
-import { TERMINAL_PROGRAM, TERMINAL_PYTHON } from "./terminal.ts";
+import { TERMINAL_PROGRAM, TERMINAL_PYTHON } from "./exec.ts";
 
 const encoder = new TextEncoder();
 function setup(
