@@ -55,10 +55,32 @@ async function record(
 export const model = {
   type: "@josh/sprites/task",
   version: "2026.09.11.1",
-  globalArguments: TaskArgsSchema,
+  globalArguments: z.object({
+    token: z.string().meta({ sensitive: true }).min(1).regex(
+      /^[\x21-\x7e]+$/,
+      "Use a bearer token without spaces or control characters.",
+    ).describe("Organization token; use a vault reference."),
+    baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+      .optional().default("https://api.sprites.dev"),
+    timeoutMs: z.number().int().min(1).max(2147483647).optional().default(
+      300000,
+    ),
+    maxResponseBytes: z.number().int().min(1).max(1073741824).optional()
+      .default(67108864),
+    sprite: z.string().min(1).describe("Name of the Sprite this belongs to."),
+    name: z.string().min(1).max(256).refine(
+      (name) => name !== "." && name !== "..",
+      "A management resource name must not be a dot segment.",
+    ),
+  }),
   resources: {
     state: {
-      schema: TaskRecord,
+      schema: z.object({
+        name: z.string(),
+        started_at: z.iso.datetime({ offset: true }),
+        expires_at: z.iso.datetime({ offset: true }),
+        sprite: z.object({ name: z.string(), id: z.string() }),
+      }),
       description:
         "Observed task expiry and its Sprite identity; refresh explicitly when needed",
       lifetime: "infinite",
@@ -69,7 +91,34 @@ export const model = {
     create: {
       description:
         "Create a task hold; an existing name fails rather than being refreshed",
-      arguments: z.object({ expire: z.union(TaskExpiry.options) }),
+      arguments: z.object({
+        expire: z.union([
+          z.number().int().positive().max(3600),
+          z.string().min(1).max(128).refine(
+            (text) => {
+              const parts = [
+                ...text.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g),
+              ];
+              const seconds = parts.reduce(
+                (sum, part) =>
+                  sum + Number(part[1]) * ({
+                      ns: 1e-9,
+                      us: 0.000001,
+                      "\u00B5s": 0.000001,
+                      ms: 0.001,
+                      s: 1,
+                      m: 60,
+                      h: 3600,
+                    } as Record<string, number>)[part[2]],
+                0,
+              );
+              return parts.map((part) => part[0]).join("") === text &&
+                seconds > 0 && seconds <= 3600;
+            },
+            "Task expiration must be a positive duration of at most one hour.",
+          ),
+        ]),
+      }),
       execute: (
         args: { expire: z.output<typeof TaskExpiry> },
         ctx: TaskContext,
@@ -111,7 +160,34 @@ export const model = {
     },
     refresh: {
       description: "Refresh this task hold, or create it if absent",
-      arguments: z.object({ expire: z.union(TaskExpiry.options) }),
+      arguments: z.object({
+        expire: z.union([
+          z.number().int().positive().max(3600),
+          z.string().min(1).max(128).refine(
+            (text) => {
+              const parts = [
+                ...text.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g),
+              ];
+              const seconds = parts.reduce(
+                (sum, part) =>
+                  sum + Number(part[1]) * ({
+                      ns: 1e-9,
+                      us: 0.000001,
+                      "\u00B5s": 0.000001,
+                      ms: 0.001,
+                      s: 1,
+                      m: 60,
+                      h: 3600,
+                    } as Record<string, number>)[part[2]],
+                0,
+              );
+              return parts.map((part) => part[0]).join("") === text &&
+                seconds > 0 && seconds <= 3600;
+            },
+            "Task expiration must be a positive duration of at most one hour.",
+          ),
+        ]),
+      }),
       execute: (
         args: { expire: z.output<typeof TaskExpiry> },
         ctx: TaskContext,

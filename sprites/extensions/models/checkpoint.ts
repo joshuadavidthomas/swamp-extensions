@@ -15,25 +15,6 @@ import {
   spritePath,
 } from "./_lib/sprite.ts";
 
-const CheckpointArgsSchema = z.object({
-  token: z.string().meta({ sensitive: true }).min(1).regex(
-    /^[\x21-\x7e]+$/,
-    "Use a bearer token without spaces or control characters.",
-  ).describe("Organization token; use a vault reference."),
-  baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
-    .optional().default("https://api.sprites.dev"),
-  timeoutMs: z.number().int().min(1).max(2_147_483_647).optional().default(
-    300_000,
-  ),
-  maxResponseBytes: z.number().int().min(1).max(1_073_741_824).optional()
-    .default(
-      67_108_864,
-    ),
-  sprite: z.string().min(1).describe("Name of the Sprite this belongs to."),
-  name: z.string().min(1).describe(
-    "Local slot name for a saved checkpoint id.",
-  ),
-});
 const CheckpointRecord = Checkpoint.extend({ sprite: SpriteIdentity });
 
 function methodDescription(name: string): string {
@@ -64,22 +45,81 @@ async function record(
 export const model = {
   type: "@josh/sprites/checkpoint",
   version: "2026.09.11.1",
-  globalArguments: CheckpointArgsSchema,
+  globalArguments: z.object({
+    token: z.string().meta({ sensitive: true }).min(1).regex(
+      /^[\x21-\x7e]+$/,
+      "Use a bearer token without spaces or control characters.",
+    ).describe("Organization token; use a vault reference."),
+    baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+      .optional().default("https://api.sprites.dev"),
+    timeoutMs: z.number().int().min(1).max(2147483647).optional().default(
+      300000,
+    ),
+    maxResponseBytes: z.number().int().min(1).max(1073741824).optional()
+      .default(67108864),
+    sprite: z.string().min(1).describe("Name of the Sprite this belongs to."),
+    name: z.string().min(1).describe(
+      "Local slot name for a saved checkpoint id.",
+    ),
+  }),
   resources: {
     state: {
-      schema: CheckpointRecord,
+      schema: z.object({
+        id: z.string(),
+        create_time: z.iso.datetime({ offset: true }),
+        comment: z.string().optional(),
+        health: z.string().optional(),
+        source_id: z.string().optional(),
+        sprite: z.object({ name: z.string(), id: z.string() }),
+      }),
       description: "Saved checkpoint and its Sprite identity",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     create: {
-      schema: CheckpointEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("info"),
+            data: z.string(),
+            time: z.iso.datetime({ offset: true }),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            data: z.string(),
+            time: z.iso.datetime({ offset: true }),
+          }),
+          z.object({
+            type: z.literal("error"),
+            error: z.string(),
+            time: z.iso.datetime({ offset: true }),
+          }),
+        ])),
+      }),
       description: "Checkpoint creation progress",
       lifetime: "7d",
       garbageCollection: 10,
     },
     restore: {
-      schema: CheckpointEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("info"),
+            data: z.string(),
+            time: z.iso.datetime({ offset: true }),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            data: z.string(),
+            time: z.iso.datetime({ offset: true }),
+          }),
+          z.object({
+            type: z.literal("error"),
+            error: z.string(),
+            time: z.iso.datetime({ offset: true }),
+          }),
+        ])),
+      }),
       description: "Checkpoint restoration progress",
       lifetime: "7d",
       garbageCollection: 10,

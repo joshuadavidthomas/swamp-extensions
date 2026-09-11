@@ -33,26 +33,10 @@ import { spritePath, SpriteResponse } from "./_lib/sprite.ts";
 import {
   fanOut,
   listAllSprites,
-  recordSchema,
   SpriteSelector,
   summarySchema,
 } from "./_lib/fanout.ts";
 
-const OrganizationArgsSchema = z.object({
-  token: z.string().meta({ sensitive: true }).min(1).regex(
-    /^[\x21-\x7e]+$/,
-    "Use a bearer token without spaces or control characters.",
-  ).describe("Organization token; use a vault reference."),
-  baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
-    .optional().default("https://api.sprites.dev"),
-  timeoutMs: z.number().int().min(1).max(2_147_483_647).optional().default(
-    30_000,
-  ),
-  maxResponseBytes: z.number().int().min(1).max(1_073_741_824).optional()
-    .default(
-      67_108_864,
-    ),
-});
 const InventorySchema = z.object({
   organization: z.object({
     name: z.string(),
@@ -160,7 +144,19 @@ async function executeOrganizationExec(
 export const model = {
   type: "@josh/sprites/organization",
   version: "2026.09.11.1",
-  globalArguments: OrganizationArgsSchema,
+  globalArguments: z.object({
+    token: z.string().meta({ sensitive: true }).min(1).regex(
+      /^[\x21-\x7e]+$/,
+      "Use a bearer token without spaces or control characters.",
+    ).describe("Organization token; use a vault reference."),
+    baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+      .optional().default("https://api.sprites.dev"),
+    timeoutMs: z.number().int().min(1).max(2147483647).optional().default(
+      30000,
+    ),
+    maxResponseBytes: z.number().int().min(1).max(1073741824).optional()
+      .default(67108864),
+  }),
   files: {
     spriteExecStdout: {
       description: "Operation bytes; may contain application secrets",
@@ -177,251 +173,910 @@ export const model = {
   },
   resources: {
     listConnectors: {
-      schema: ConnectionsResponseSchema,
+      schema: z.object({
+        connections: z.array(z.object({
+          id: z.string(),
+          provider: z.enum([
+            "slack",
+            "slack_bot",
+            "github",
+            "discourse",
+            "openrouter",
+            "ollama",
+            "anthropic",
+            "s3_object_store",
+            "custom_api",
+            "sprites_admin",
+          ]),
+          provider_account_id: z.string(),
+          provider_account_name: z.string().optional(),
+          scopes: z.string().nullish(),
+          connection_type: z.enum([
+            "oauth",
+            "api_key",
+            "provisioned",
+            "internal",
+          ]).optional(),
+          access_policy: z.object({
+            allow_all: z.boolean().optional().describe(
+              "Grant every Sprite access; this overrides sprite_labels and name_prefix.",
+            ),
+            sprite_labels: z.array(z.string()).optional().describe(
+              "Require every listed Sprite label.",
+            ),
+            name_prefix: z.string().optional().describe(
+              "Require Sprite names to start with this prefix.",
+            ),
+            allowed_endpoints: z.array(z.string()).optional(),
+            blocked_endpoints: z.array(z.string()).optional().describe(
+              "Provider paths denied before allowed_endpoints are evaluated.",
+            ),
+          }).describe(
+            "Complete connector access policy. An empty policy denies every Sprite.",
+          ).optional(),
+          provider_info: z.record(z.string(), z.json()).optional(),
+          user_id: z.string().nullish(),
+          token_expires_at: z.iso.datetime({ offset: true }).meta({
+            sensitive: false,
+          }).nullish(),
+          inserted_at: z.iso.datetime({ offset: true }).optional(),
+          updated_at: z.iso.datetime({ offset: true }).optional(),
+          usage_snippet: z.string().optional(),
+        })),
+      }),
       description: "Complete organization connector collection",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     setNetworkPolicy: {
-      schema: summarySchema(network),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          policy: z.object({
+            rules: z.array(
+              z.object({
+                domain: z.string().optional(),
+                action: z.enum(["allow", "deny"]).optional(),
+                include: z.string().optional(),
+              }).refine(
+                (rule) =>
+                  !(rule.domain !== undefined && rule.include !== undefined),
+                {
+                  message:
+                    "A network rule cannot contain both domain and include.",
+                },
+              ),
+            ),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last setNetworkPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteSetNetworkPolicy: {
-      schema: recordSchema(network),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        policy: z.object({
+          rules: z.array(
+            z.object({
+              domain: z.string().optional(),
+              action: z.enum(["allow", "deny"]).optional(),
+              include: z.string().optional(),
+            }).refine(
+              (rule) =>
+                !(rule.domain !== undefined && rule.include !== undefined),
+              {
+                message:
+                  "A network rule cannot contain both domain and include.",
+              },
+            ),
+          ),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of setNetworkPolicy; instance name setNetworkPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     setPrivilegesPolicy: {
-      schema: summarySchema(privileges),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          policy: z.object({
+            profile: z.enum(["", "minimal", "standard", "privileged"])
+              .optional(),
+            devices: z.array(z.string()).optional(),
+            noNewPrivileges: z.boolean().optional(),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last setPrivilegesPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteSetPrivilegesPolicy: {
-      schema: recordSchema(privileges),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        policy: z.object({
+          profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
+          devices: z.array(z.string()).optional(),
+          noNewPrivileges: z.boolean().optional(),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of setPrivilegesPolicy; instance name setPrivilegesPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     setResourcesPolicy: {
-      schema: summarySchema(resources),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          policy: z.object({
+            memory: z.object({
+              limit_mb: z.number().positive(),
+              autoscale: z.boolean().optional(),
+            }).optional(),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last setResourcesPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteSetResourcesPolicy: {
-      schema: recordSchema(resources),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        policy: z.object({
+          memory: z.object({
+            limit_mb: z.number().positive(),
+            autoscale: z.boolean().optional(),
+          }).optional(),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of setResourcesPolicy; instance name setResourcesPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     deletePrivilegesPolicy: {
-      schema: summarySchema(emptyExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last deletePrivilegesPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteDeletePrivilegesPolicy: {
-      schema: recordSchema(emptyExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of deletePrivilegesPolicy; instance name deletePrivilegesPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     deleteResourcesPolicy: {
-      schema: summarySchema(emptyExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last deleteResourcesPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteDeleteResourcesPolicy: {
-      schema: recordSchema(emptyExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of deleteResourcesPolicy; instance name deleteResourcesPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     getNetworkPolicy: {
-      schema: summarySchema(network),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          policy: z.object({
+            rules: z.array(
+              z.object({
+                domain: z.string().optional(),
+                action: z.enum(["allow", "deny"]).optional(),
+                include: z.string().optional(),
+              }).refine(
+                (rule) =>
+                  !(rule.domain !== undefined && rule.include !== undefined),
+                {
+                  message:
+                    "A network rule cannot contain both domain and include.",
+                },
+              ),
+            ),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last getNetworkPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteGetNetworkPolicy: {
-      schema: recordSchema(network),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        policy: z.object({
+          rules: z.array(
+            z.object({
+              domain: z.string().optional(),
+              action: z.enum(["allow", "deny"]).optional(),
+              include: z.string().optional(),
+            }).refine(
+              (rule) =>
+                !(rule.domain !== undefined && rule.include !== undefined),
+              {
+                message:
+                  "A network rule cannot contain both domain and include.",
+              },
+            ),
+          ),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of getNetworkPolicy; instance name getNetworkPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     getPrivilegesPolicy: {
-      schema: summarySchema(privileges),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          policy: z.object({
+            profile: z.enum(["", "minimal", "standard", "privileged"])
+              .optional(),
+            devices: z.array(z.string()).optional(),
+            noNewPrivileges: z.boolean().optional(),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last getPrivilegesPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteGetPrivilegesPolicy: {
-      schema: recordSchema(privileges),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        policy: z.object({
+          profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
+          devices: z.array(z.string()).optional(),
+          noNewPrivileges: z.boolean().optional(),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of getPrivilegesPolicy; instance name getPrivilegesPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     getResourcesPolicy: {
-      schema: summarySchema(resources),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          policy: z.object({
+            memory: z.object({
+              limit_mb: z.number().positive(),
+              autoscale: z.boolean().optional(),
+            }).optional(),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last getResourcesPolicy run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteGetResourcesPolicy: {
-      schema: recordSchema(resources),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        policy: z.object({
+          memory: z.object({
+            limit_mb: z.number().positive(),
+            autoscale: z.boolean().optional(),
+          }).optional(),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of getResourcesPolicy; instance name getResourcesPolicy-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     upgrade: {
-      schema: summarySchema(upgradeExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          version: z.string().nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last upgrade run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteUpgrade: {
-      schema: recordSchema(upgradeExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        version: z.string().nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of upgrade; instance name upgrade-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     restart: {
-      schema: summarySchema(emptyExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last restart run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteRestart: {
-      schema: recordSchema(emptyExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of restart; instance name restart-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     createCheckpoint: {
-      schema: summarySchema(checkpointExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          checkpoint: z.object({
+            id: z.string(),
+            create_time: z.iso.datetime({ offset: true }),
+            comment: z.string().optional(),
+            health: z.string().optional(),
+            source_id: z.string().optional(),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last createCheckpoint run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteCreateCheckpoint: {
-      schema: recordSchema(checkpointExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        checkpoint: z.object({
+          id: z.string(),
+          create_time: z.iso.datetime({ offset: true }),
+          comment: z.string().optional(),
+          health: z.string().optional(),
+          source_id: z.string().optional(),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of createCheckpoint; instance name createCheckpoint-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     putService: {
-      schema: summarySchema(serviceExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          serviceName: z.string(),
+          exitCode: z.number().int().nullable().optional(),
+          service: z.object({
+            name: z.string(),
+            cmd: z.string(),
+            args: z.array(z.string()).nullable(),
+            env: z.record(z.string(), z.string()).meta({
+              sensitive: true,
+            }).optional(),
+            dir: z.string().optional(),
+            needs: z.array(z.string()).nullable(),
+            http_port: z.number().int().nullable().optional(),
+            state: z.object({
+              name: z.string(),
+              status: z.enum([
+                "stopped",
+                "starting",
+                "running",
+                "stopping",
+                "failed",
+              ]),
+              pid: z.number().int().optional(),
+              started_at: z.string().optional(),
+              error: z.string().optional(),
+              restart_count: z.number().int().nonnegative().optional(),
+              next_restart_at: z.string().optional(),
+            }).nullish(),
+          }).nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last putService run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spritePutService: {
-      schema: recordSchema(serviceExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        serviceName: z.string(),
+        exitCode: z.number().int().nullable().optional(),
+        service: z.object({
+          name: z.string(),
+          cmd: z.string(),
+          args: z.array(z.string()).nullable(),
+          env: z.record(z.string(), z.string()).meta({
+            sensitive: true,
+          }).optional(),
+          dir: z.string().optional(),
+          needs: z.array(z.string()).nullable(),
+          http_port: z.number().int().nullable().optional(),
+          state: z.object({
+            name: z.string(),
+            status: z.enum([
+              "stopped",
+              "starting",
+              "running",
+              "stopping",
+              "failed",
+            ]),
+            pid: z.number().int().optional(),
+            started_at: z.string().optional(),
+            error: z.string().optional(),
+            restart_count: z.number().int().nonnegative().optional(),
+            next_restart_at: z.string().optional(),
+          }).nullish(),
+        }).nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of putService; instance name putService-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     startService: {
-      schema: summarySchema(serviceExitExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          serviceName: z.string(),
+          exitCode: z.number().int().nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last startService run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteStartService: {
-      schema: recordSchema(serviceExitExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        serviceName: z.string(),
+        exitCode: z.number().int().nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of startService; instance name startService-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     stopService: {
-      schema: summarySchema(serviceExitExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          serviceName: z.string(),
+          exitCode: z.number().int().nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last stopService run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteStopService: {
-      schema: recordSchema(serviceExitExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        serviceName: z.string(),
+        exitCode: z.number().int().nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of stopService; instance name stopService-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     restartService: {
-      schema: summarySchema(serviceExitExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          serviceName: z.string(),
+          exitCode: z.number().int().nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last restartService run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteRestartService: {
-      schema: recordSchema(serviceExitExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        serviceName: z.string(),
+        exitCode: z.number().int().nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of restartService; instance name restartService-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     deleteService: {
-      schema: summarySchema(serviceDeleteExtra),
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          serviceName: z.string(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "Last deleteService run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteDeleteService: {
-      schema: recordSchema(serviceDeleteExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        serviceName: z.string(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of deleteService; instance name deleteService-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     exec: {
-      schema: ExecSummary,
+      schema: z.object({
+        select: z.object({
+          all: z.literal(true).optional(),
+          prefix: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+        }),
+        matched: z.number().int().nonnegative(),
+        applied: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        results: z.array(z.object({
+          name: z.string(),
+          id: z.string(),
+          status: z.enum(["applied", "failed"]),
+          error: z.string().optional(),
+          exitCode: z.number().int().nullable().optional(),
+          stdoutBytes: z.number().int().nonnegative().nullable().optional(),
+          stderrBytes: z.number().int().nonnegative().nullable().optional(),
+        })),
+        observedAt: z.iso.datetime({ offset: true }),
+        nonzero: z.number().int().nonnegative(),
+      }),
       description:
         "Last exec run: which Sprites it matched, applied to, and failed on",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     spriteExec: {
-      schema: recordSchema(execExtra),
+      schema: z.object({
+        name: z.string(),
+        id: z.string(),
+        status: z.enum(["applied", "failed"]),
+        error: z.string().optional(),
+        exitCode: z.number().int().nullable().optional(),
+        stdoutBytes: z.number().int().nonnegative().nullable().optional(),
+        stderrBytes: z.number().int().nonnegative().nullable().optional(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description:
         "One Sprite's outcome of exec; instance name exec-<sprite-id>",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     listSprites: {
-      schema: InventorySchema,
+      schema: z.object({
+        organization: z.object({
+          name: z.string(),
+          runningLimit: z.number().int().nonnegative().nullable(),
+          warmLimit: z.number().int().nonnegative().nullable(),
+        }),
+        counts: z.object({
+          total: z.number().int().nonnegative(),
+          running: z.number().int().nonnegative(),
+          warm: z.number().int().nonnegative(),
+          cold: z.number().int().nonnegative(),
+        }),
+        sprites: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          organization: z.string(),
+          url: z.string(),
+          status: z.enum(["cold", "warm", "running"]),
+          created_at: z.iso.datetime({ offset: true }),
+          updated_at: z.iso.datetime({ offset: true }),
+          url_settings: z.object({
+            auth: z.enum(["sprite", "public"]),
+            private_access: z.enum(["admins", "org_users"]).optional(),
+          }).nullish(),
+          version: z.string().nullish(),
+          environment_version: z.string().nullish(),
+          labels: z.array(z.string()).optional(),
+          last_running_at: z.iso.datetime({ offset: true }).nullish(),
+          last_warming_at: z.iso.datetime({ offset: true }).nullish(),
+        })),
+        prefix: z.string().nullable(),
+        observedAt: z.iso.datetime({ offset: true }),
+      }),
       description: "Current Sprites and capacity limits for one organization",
       lifetime: "infinite",
       garbageCollection: 10,
@@ -444,7 +1099,28 @@ export const model = {
           z.object({ kind: z.literal("text"), text: z.string() }),
           z.object({ kind: z.literal("base64"), base64: z.base64() }),
         ]).optional().meta({ sensitive: true }),
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: OrganizationExecInput,
@@ -507,8 +1183,44 @@ export const model = {
       description:
         "Replace the network policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setNetworkPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
-        policy: z.object(NetworkPolicy.shape),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
+        policy: z.object({
+          rules: z.array(
+            z.object({
+              domain: z.string().optional(),
+              action: z.enum(["allow", "deny"]).optional(),
+              include: z.string().optional(),
+            }).refine(
+              (rule) =>
+                !(rule.domain !== undefined && rule.include !== undefined),
+              {
+                message:
+                  "A network rule cannot contain both domain and include.",
+              },
+            ),
+          ),
+        }),
       }),
       execute: (
         args: {
@@ -545,8 +1257,33 @@ export const model = {
       description:
         "Set the privileges policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setPrivilegesPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
-        policy: z.object(PrivilegesPolicy.shape),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
+        policy: z.object({
+          profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
+          devices: z.array(z.string()).optional(),
+          noNewPrivileges: z.boolean().optional(),
+        }),
       }),
       execute: (
         args: {
@@ -583,8 +1320,34 @@ export const model = {
       description:
         "Set the resources policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as setResourcesPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
-        policy: z.object(ResourcesPolicy.shape),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
+        policy: z.object({
+          memory: z.object({
+            limit_mb: z.number().positive(),
+            autoscale: z.boolean().optional(),
+          }).optional(),
+        }),
       }),
       execute: (
         args: {
@@ -621,7 +1384,28 @@ export const model = {
       description:
         "Remove the privileges policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as deletePrivilegesPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: { select: z.output<typeof SpriteSelector> },
@@ -654,7 +1438,28 @@ export const model = {
       description:
         "Remove the resources policy from every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as deleteResourcesPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: { select: z.output<typeof SpriteSelector> },
@@ -687,7 +1492,28 @@ export const model = {
       description:
         "Read the network policy from every Sprite the selector matches; each Sprite's outcome is also saved as getNetworkPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: { select: z.output<typeof SpriteSelector> },
@@ -720,7 +1546,28 @@ export const model = {
       description:
         "Read the privileges policy from every Sprite the selector matches; each Sprite's outcome is also saved as getPrivilegesPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: { select: z.output<typeof SpriteSelector> },
@@ -753,7 +1600,28 @@ export const model = {
       description:
         "Read the resources policy from every Sprite the selector matches; each Sprite's outcome is also saved as getResourcesPolicy-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: { select: z.output<typeof SpriteSelector> },
@@ -786,7 +1654,28 @@ export const model = {
       description:
         "Request a runtime upgrade on every Sprite the selector matches; success only records provider acceptance; each Sprite's outcome is also saved as upgrade-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         version: z.string().optional(),
       }),
       execute: (
@@ -821,7 +1710,28 @@ export const model = {
       description:
         "Request a restart on every Sprite the selector matches; success only records provider acceptance; each Sprite's outcome is also saved as restart-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
       }),
       execute: (
         args: { select: z.output<typeof SpriteSelector> },
@@ -854,7 +1764,28 @@ export const model = {
       description:
         "Take a checkpoint on every Sprite the selector matches; each Sprite's outcome is also saved as createCheckpoint-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         comment: z.string().optional(),
       }),
       execute: (
@@ -910,7 +1841,28 @@ export const model = {
       description:
         "Create or update the named service on every Sprite the selector matches; each Sprite's outcome is also saved as putService-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         service_name: z.string().min(1),
         service: z.object({
           cmd: z.string().min(1),
@@ -983,7 +1935,28 @@ export const model = {
       description:
         "Start the named service on every Sprite the selector matches; each Sprite's outcome is also saved as startService-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         service_name: z.string().min(1),
         duration: z.string().min(1).optional(),
       }),
@@ -1038,7 +2011,28 @@ export const model = {
       description:
         "Stop the named service on every Sprite the selector matches; each Sprite's outcome is also saved as stopService-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         service_name: z.string().min(1),
         timeout: z.string().min(1).optional(),
       }),
@@ -1087,7 +2081,28 @@ export const model = {
       description:
         "Restart the named service on every Sprite the selector matches; each Sprite's outcome is also saved as restartService-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         service_name: z.string().min(1),
         duration: z.string().min(1).optional(),
       }),
@@ -1142,7 +2157,28 @@ export const model = {
       description:
         "Delete the named service on every Sprite the selector matches; each Sprite's outcome is also saved as deleteService-<sprite-id>",
       arguments: z.object({
-        select: z.object(SpriteSelector.shape).pipe(SpriteSelector),
+        select: z.object({
+          all: z.literal(true).optional().describe(
+            "Every Sprite in the organization.",
+          ),
+          prefix: z.string().min(1).optional().describe(
+            "Sprites whose name starts with this.",
+          ),
+          labels: z.array(z.string().min(1)).min(1).optional().describe(
+            "Sprites carrying every one of these labels.",
+          ),
+        }).refine(
+          (select) =>
+            select.all === true || select.prefix !== undefined ||
+            select.labels !== undefined,
+          {
+            message: "Select Sprites with all, prefix, or labels.",
+          },
+        ).refine((select) =>
+          !(select.all === true &&
+            (select.prefix !== undefined || select.labels !== undefined)), {
+          message: "all cannot be combined with prefix or labels.",
+        }),
         service_name: z.string().min(1),
       }),
       execute: (

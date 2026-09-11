@@ -975,7 +975,7 @@ Deno.test("deleteResourcesPolicy uses the resources route and record names", asy
 Deno.test("getNetworkPolicy reads each current policy into the summary and method records", async () => {
   const context = testContext(globalArgs);
   const policies = [getNetworkPolicy, {
-    rules: [{ domain: "blocked.example", action: "deny" }],
+    rules: [{ domain: "blocked.example", action: "deny" as const }],
   }];
   const { result, calls } = await withMockedFetch(
     [
@@ -1007,7 +1007,7 @@ Deno.test("getNetworkPolicy reads each current policy into the summary and metho
   const results = policies.map((policy, index) => ({
     name: `worker-${index + 1}`,
     id: `sprite-${index + 1}`,
-    status: "applied",
+    status: "applied" as const,
     policy,
   }));
   assertEquals(writes[2].specName, "getNetworkPolicy");
@@ -1066,7 +1066,7 @@ Deno.test("upgrade posts with and without a version and records provider accepta
     const results = [1, 2].map((index) => ({
       name: `worker-${index}`,
       id: `sprite-${index}`,
-      status: "applied",
+      status: "applied" as const,
       version: version ?? null,
     }));
     assertEquals(writes[2].specName, "upgrade");
@@ -1116,7 +1116,7 @@ Deno.test("restart posts without a body and saves each outcome and summary", asy
   const results = [1, 2].map((index) => ({
     name: `worker-${index}`,
     id: `sprite-${index}`,
-    status: "applied",
+    status: "applied" as const,
   }));
   assertEquals(writes[2].specName, "restart");
   assertEquals(writes.at(-1)!.data, summary);
@@ -1205,8 +1205,8 @@ Deno.test("createCheckpoint saves the newest checkpoint and continues after an e
       name: `worker-${i}`,
       id: `sprite-${i}`,
       ...(empty && i === 2
-        ? { status: "failed", error: "request failed" }
-        : { status: "applied", checkpoint: newest }),
+        ? { status: "failed" as const, error: "request failed" }
+        : { status: "applied" as const, checkpoint: newest }),
     }));
     assertEquals(writes[3].specName, "createCheckpoint");
     assertEquals(writes[3].name, "createCheckpoint");
@@ -1336,7 +1336,7 @@ for (const action of ["put", "start", "stop", "restart", "delete"] as const) {
       name: `worker-${i}`,
       id: `sprite-${i}`,
       serviceName: "web/api",
-      status: "applied",
+      status: "applied" as const,
       ...(action === "delete"
         ? {}
         : { exitCode: action === "stop" ? 9 : null }),
@@ -1465,7 +1465,7 @@ Deno.test("putService records a startup exit and still runs the third Sprite", a
     name: "worker-2",
     id: "sprite-2",
     serviceName: "web",
-    status: "failed",
+    status: "failed" as const,
     error: "exited during startup with code 17",
     exitCode: 17,
     service: null,
@@ -1538,7 +1538,7 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
     {
       name: "worker-1",
       id: "sprite-1",
-      status: "applied",
+      status: "applied" as const,
       exitCode: 0,
       stdoutBytes: 2,
       stderrBytes: 1,
@@ -1546,7 +1546,7 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
     {
       name: "worker-2",
       id: "sprite-2",
-      status: "applied",
+      status: "applied" as const,
       exitCode: 1,
       stdoutBytes: 2,
       stderrBytes: 1,
@@ -1554,7 +1554,7 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
     {
       name: "worker-3",
       id: "sprite-3",
-      status: "failed",
+      status: "failed" as const,
       error: "request failed",
     },
   ];

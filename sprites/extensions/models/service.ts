@@ -83,41 +83,286 @@ async function sendServiceSignal(
 export const model = {
   type: "@josh/sprites/service",
   version: "2026.09.11.1",
-  globalArguments: ServiceArgsSchema,
+  globalArguments: z.object({
+    token: z.string().meta({ sensitive: true }).min(1).regex(
+      /^[\x21-\x7e]+$/,
+      "Use a bearer token without spaces or control characters.",
+    ).describe("Organization token; use a vault reference."),
+    baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+      .optional().default("https://api.sprites.dev"),
+    timeoutMs: z.number().int().min(1).max(2147483647).optional().default(
+      300000,
+    ),
+    maxResponseBytes: z.number().int().min(1).max(1073741824).optional()
+      .default(67108864),
+    sprite: z.string().min(1).describe("Name of the Sprite this belongs to."),
+    service_name: z.string().min(1).describe("Service name on that Sprite."),
+  }),
   resources: {
     state: {
-      schema: ServiceRecord,
+      schema: z.object({
+        name: z.string(),
+        cmd: z.string(),
+        args: z.array(z.string()).nullable(),
+        env: z.record(z.string(), z.string()).meta({
+          sensitive: true,
+        }).optional(),
+        dir: z.string().optional(),
+        needs: z.array(z.string()).nullable(),
+        http_port: z.number().int().nullable().optional(),
+        state: z.object({
+          name: z.string(),
+          status: z.enum([
+            "stopped",
+            "starting",
+            "running",
+            "stopping",
+            "failed",
+          ]),
+          pid: z.number().int().optional(),
+          started_at: z.string().optional(),
+          error: z.string().optional(),
+          restart_count: z.number().int().nonnegative().optional(),
+          next_restart_at: z.string().optional(),
+        }).nullish(),
+        sprite: z.object({ name: z.string(), id: z.string() }),
+      }),
       description:
         "This service's definition, last known status, and the Sprite it belongs to",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     put: {
-      schema: ServiceEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdout"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stderr"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("error"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("exit"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({ type: z.literal("started"), timestamp: z.number().int() }),
+          z.object({
+            type: z.literal("stopping"),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stopped"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            timestamp: z.number().int(),
+            log_files: z.record(z.string(), z.string()).optional(),
+          }),
+        ])),
+        truncated: z.boolean().describe(
+          "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
+        ),
+      }),
       description: "Create or update progress",
       lifetime: "7d",
       garbageCollection: 10,
     },
     start: {
-      schema: ServiceEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdout"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stderr"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("error"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("exit"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({ type: z.literal("started"), timestamp: z.number().int() }),
+          z.object({
+            type: z.literal("stopping"),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stopped"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            timestamp: z.number().int(),
+            log_files: z.record(z.string(), z.string()).optional(),
+          }),
+        ])),
+        truncated: z.boolean().describe(
+          "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
+        ),
+      }),
       description: "Start progress",
       lifetime: "7d",
       garbageCollection: 10,
     },
     stop: {
-      schema: ServiceEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdout"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stderr"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("error"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("exit"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({ type: z.literal("started"), timestamp: z.number().int() }),
+          z.object({
+            type: z.literal("stopping"),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stopped"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            timestamp: z.number().int(),
+            log_files: z.record(z.string(), z.string()).optional(),
+          }),
+        ])),
+        truncated: z.boolean().describe(
+          "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
+        ),
+      }),
       description: "Stop progress",
       lifetime: "7d",
       garbageCollection: 10,
     },
     restart: {
-      schema: ServiceEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdout"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stderr"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("error"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("exit"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({ type: z.literal("started"), timestamp: z.number().int() }),
+          z.object({
+            type: z.literal("stopping"),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stopped"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            timestamp: z.number().int(),
+            log_files: z.record(z.string(), z.string()).optional(),
+          }),
+        ])),
+        truncated: z.boolean().describe(
+          "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
+        ),
+      }),
       description: "Restart progress",
       lifetime: "7d",
       garbageCollection: 10,
     },
     logs: {
-      schema: ServiceEvents,
+      schema: z.object({
+        events: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdout"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stderr"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("error"),
+            data: z.string().meta({ sensitive: true }),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("exit"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({ type: z.literal("started"), timestamp: z.number().int() }),
+          z.object({
+            type: z.literal("stopping"),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("stopped"),
+            exit_code: z.number().int(),
+            timestamp: z.number().int(),
+          }),
+          z.object({
+            type: z.literal("complete"),
+            timestamp: z.number().int(),
+            log_files: z.record(z.string(), z.string()).optional(),
+          }),
+        ])),
+        truncated: z.boolean().describe(
+          "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
+        ),
+      }),
       description: "Log stream",
       lifetime: "7d",
       garbageCollection: 10,

@@ -12,10 +12,11 @@
   },
   "tasks": {
     "check": "deno check extensions/models/**/*.ts",
-    "lint": "deno lint extensions/models",
-    "fmt": "deno fmt extensions/models",
-    "fmt:check": "deno fmt --check extensions/models",
-    "test": "deno test --allow-env extensions/models --ignore=extensions/models/_lib/transport_test.ts",
+    "lint": "deno lint extensions/models scripts",
+    "fmt": "deno fmt extensions/models scripts",
+    "fmt:check": "deno fmt --check extensions/models scripts",
+    "verify:contracts": "deno run --no-lock --allow-env --allow-read=extensions/models scripts/verify_model_contracts.ts",
+    "test": "deno task verify:contracts && deno test --allow-env extensions/models --ignore=extensions/models/_lib/transport_test.ts",
     "test:transport": "deno test --allow-net=127.0.0.1 --allow-env --allow-read --allow-write --allow-run=openssl extensions/models/_lib/transport_test.ts"
   }
 }

@@ -85,16 +85,83 @@ async function request(
 export const model = {
   type: "@josh/sprites/connector",
   version: "2026.09.11.1",
-  globalArguments: ConnectorArgsSchema,
+  globalArguments: z.object({
+    token: z.string().meta({ sensitive: true }).min(1).regex(
+      /^[\x21-\x7e]+$/,
+      "Use a bearer token without spaces or control characters.",
+    ).describe("Organization token; use a vault reference."),
+    baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+      .optional().default("https://api.sprites.dev"),
+    timeoutMs: z.number().int().min(1).max(2147483647).optional().default(
+      300000,
+    ),
+    maxResponseBytes: z.number().int().min(1).max(1073741824).optional()
+      .default(67108864),
+    name: z.string().min(1).describe(
+      "Local instance name for this connection.",
+    ),
+    provider: z.string().min(1),
+  }),
   resources: {
     state: {
-      schema: ConnectionSchema,
+      schema: z.object({
+        id: z.string(),
+        provider: z.enum([
+          "slack",
+          "slack_bot",
+          "github",
+          "discourse",
+          "openrouter",
+          "ollama",
+          "anthropic",
+          "s3_object_store",
+          "custom_api",
+          "sprites_admin",
+        ]),
+        provider_account_id: z.string(),
+        provider_account_name: z.string().optional(),
+        scopes: z.string().nullish(),
+        connection_type: z.enum([
+          "oauth",
+          "api_key",
+          "provisioned",
+          "internal",
+        ]).optional(),
+        access_policy: z.object({
+          allow_all: z.boolean().optional().describe(
+            "Grant every Sprite access; this overrides sprite_labels and name_prefix.",
+          ),
+          sprite_labels: z.array(z.string()).optional().describe(
+            "Require every listed Sprite label.",
+          ),
+          name_prefix: z.string().optional().describe(
+            "Require Sprite names to start with this prefix.",
+          ),
+          allowed_endpoints: z.array(z.string()).optional(),
+          blocked_endpoints: z.array(z.string()).optional().describe(
+            "Provider paths denied before allowed_endpoints are evaluated.",
+          ),
+        }).describe(
+          "Complete connector access policy. An empty policy denies every Sprite.",
+        ).optional(),
+        provider_info: z.record(z.string(), z.json()).optional(),
+        user_id: z.string().nullish(),
+        token_expires_at: z.iso.datetime({ offset: true }).meta({
+          sensitive: false,
+        }).nullish(),
+        inserted_at: z.iso.datetime({ offset: true }).optional(),
+        updated_at: z.iso.datetime({ offset: true }).optional(),
+        usage_snippet: z.string().optional(),
+      }),
       description: "This organization connection and its current access policy",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     authorize: {
-      schema: AuthorizationSchema,
+      schema: z.object({
+        authorize_url: z.string().meta({ sensitive: true }),
+        state: z.string().meta({ sensitive: true }),
+      }).meta({ sensitive: true }),
       description: "Sensitive provider authorization URL and OAuth state",
       lifetime: "1d",
       garbageCollection: 10,
@@ -108,8 +175,22 @@ export const model = {
         api_key: z.string().min(1).meta({ sensitive: true }).describe(
           "Use a vault reference for the provider credential.",
         ),
-        access_policy: z.object(AccessPolicySchema.shape).describe(
-          AccessPolicySchema.description!,
+        access_policy: z.object({
+          allow_all: z.boolean().optional().describe(
+            "Grant every Sprite access; this overrides sprite_labels and name_prefix.",
+          ),
+          sprite_labels: z.array(z.string()).optional().describe(
+            "Require every listed Sprite label.",
+          ),
+          name_prefix: z.string().optional().describe(
+            "Require Sprite names to start with this prefix.",
+          ),
+          allowed_endpoints: z.array(z.string()).optional(),
+          blocked_endpoints: z.array(z.string()).optional().describe(
+            "Provider paths denied before allowed_endpoints are evaluated.",
+          ),
+        }).describe(
+          "Complete connector access policy. An empty policy denies every Sprite."!,
         ).optional(),
       }),
       execute: (
@@ -197,8 +278,22 @@ export const model = {
       arguments: z.object({
         code: z.string().min(1).meta({ sensitive: true }),
         redirect_uri: z.string().optional(),
-        access_policy: z.object(AccessPolicySchema.shape).describe(
-          AccessPolicySchema.description!,
+        access_policy: z.object({
+          allow_all: z.boolean().optional().describe(
+            "Grant every Sprite access; this overrides sprite_labels and name_prefix.",
+          ),
+          sprite_labels: z.array(z.string()).optional().describe(
+            "Require every listed Sprite label.",
+          ),
+          name_prefix: z.string().optional().describe(
+            "Require Sprite names to start with this prefix.",
+          ),
+          allowed_endpoints: z.array(z.string()).optional(),
+          blocked_endpoints: z.array(z.string()).optional().describe(
+            "Provider paths denied before allowed_endpoints are evaluated.",
+          ),
+        }).describe(
+          "Complete connector access policy. An empty policy denies every Sprite."!,
         ).optional(),
       }),
       execute: (
@@ -250,8 +345,22 @@ export const model = {
     updatePolicy: {
       description: "Replace this connection's complete access policy",
       arguments: z.object({
-        access_policy: z.object(AccessPolicySchema.shape).describe(
-          AccessPolicySchema.description!,
+        access_policy: z.object({
+          allow_all: z.boolean().optional().describe(
+            "Grant every Sprite access; this overrides sprite_labels and name_prefix.",
+          ),
+          sprite_labels: z.array(z.string()).optional().describe(
+            "Require every listed Sprite label.",
+          ),
+          name_prefix: z.string().optional().describe(
+            "Require Sprite names to start with this prefix.",
+          ),
+          allowed_endpoints: z.array(z.string()).optional(),
+          blocked_endpoints: z.array(z.string()).optional().describe(
+            "Provider paths denied before allowed_endpoints are evaluated.",
+          ),
+        }).describe(
+          "Complete connector access policy. An empty policy denies every Sprite."!,
         ),
       }),
       execute: (

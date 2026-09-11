@@ -89,24 +89,6 @@ function methodDescription(name: string): string {
   const methods: Record<string, { description: string }> = model.methods;
   return methods[name].description;
 }
-const SpriteArgsSchema = z.object({
-  token: z.string().meta({ sensitive: true }).min(1).regex(
-    /^[\x21-\x7e]+$/,
-    "Use a bearer token without spaces or control characters.",
-  ).describe("Organization token; use a vault reference."),
-  baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
-    .optional().default("https://api.sprites.dev"),
-  timeoutMs: z.number().int().min(1).max(2_147_483_647).optional().default(
-    300_000,
-  ),
-  maxResponseBytes: z.number().int().min(1).max(1_073_741_824).optional()
-    .default(
-      67_108_864,
-    ),
-  name: z.string().min(1).describe(
-    "Sprite name within the token's organization.",
-  ),
-});
 const RequestUrlSettings = z.object({
   auth: z.enum(["sprite", "public"]).optional(),
   private_access: z.enum(["admins", "org_users"]).optional(),
@@ -333,166 +315,497 @@ const GatewayRequestArgs = z.object({
 export const model = {
   type: "@josh/sprites/sprite",
   version: "2026.09.11.1",
-  globalArguments: SpriteArgsSchema,
+  globalArguments: z.object({
+    token: z.string().meta({ sensitive: true }).min(1).regex(
+      /^[\x21-\x7e]+$/,
+      "Use a bearer token without spaces or control characters.",
+    ).describe("Organization token; use a vault reference."),
+    baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+      .optional().default("https://api.sprites.dev"),
+    timeoutMs: z.number().int().min(1).max(2147483647).optional().default(
+      300000,
+    ),
+    maxResponseBytes: z.number().int().min(1).max(1073741824).optional()
+      .default(67108864),
+    name: z.string().min(1).describe(
+      "Sprite name within the token's organization.",
+    ),
+  }),
   resources: {
     state: {
-      schema: SpriteResponse,
+      schema: z.object({
+        id: z.string(),
+        name: z.string(),
+        organization: z.string(),
+        url: z.string(),
+        status: z.enum(["cold", "warm", "running"]),
+        created_at: z.iso.datetime({ offset: true }),
+        updated_at: z.iso.datetime({ offset: true }),
+        url_settings: z.object({
+          auth: z.enum(["sprite", "public"]),
+          private_access: z.enum(["admins", "org_users"]).optional(),
+        }).nullish(),
+        version: z.string().nullish(),
+        environment_version: z.string().nullish(),
+        labels: z.array(z.string()).optional(),
+        last_running_at: z.iso.datetime({ offset: true }).nullish(),
+        last_warming_at: z.iso.datetime({ offset: true }).nullish(),
+      }),
       description: "Current provider metadata for this Sprite",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     probeUrl: {
-      schema: UrlProbe,
+      schema: z.object({
+        bodyBytes: z.number().int().nonnegative(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      }),
       description:
         "Authenticated root URL response fingerprint; not a general application health guarantee",
       lifetime: "7d",
       garbageCollection: 10,
     },
     listCheckpoints: {
-      schema: Checkpoints,
+      schema: z.object({
+        checkpoints: z.array(z.object({
+          id: z.string(),
+          create_time: z.iso.datetime({ offset: true }),
+          comment: z.string().optional(),
+          health: z.string().optional(),
+          source_id: z.string().optional(),
+        })),
+      }),
       description: "Sprite checkpoints",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     controlExec: {
-      schema: ControlExecution,
+      schema: z.object({
+        stdoutBytes: z.number().int().nonnegative(),
+        stderrBytes: z.number().int().nonnegative(),
+        operations: z.array(z.object({
+          operation: z.number().int().min(1),
+          exitCode: z.number().int(),
+          tty: z.boolean(),
+          stdoutOffset: z.number().int().nonnegative(),
+          stdoutLength: z.number().int().nonnegative(),
+          stderrOffset: z.number().int().nonnegative(),
+          stderrLength: z.number().int().nonnegative(),
+        })).min(1).max(100),
+      }),
       description:
         "Sequential control-channel exec result and artifact byte ranges",
       lifetime: "7d",
       garbageCollection: 10,
     },
     exec: {
-      schema: Execution,
+      schema: z.object({
+        status: z.enum(["exited", "detached"]),
+        exitCode: z.number().int().nullable(),
+        sessionId: z.string().nullable(),
+        stdoutBytes: z.number().int().nonnegative(),
+        stderrBytes: z.number().int().nonnegative(),
+        controls: z.array(z.discriminatedUnion("type", [
+          z.object({ type: z.literal("exit"), exit_code: z.number().int() }),
+          z.object({
+            type: z.enum([
+              "session_info",
+              "port_opened",
+              "port_closed",
+              "debug",
+              "error",
+            ]),
+            session_id: z.string().optional(),
+            command: z.string().optional(),
+            created: z.number().optional(),
+            is_owner: z.boolean().optional(),
+            tty: z.boolean().optional(),
+            cols: z.number().optional(),
+            rows: z.number().optional(),
+            port: z.number().optional(),
+            address: z.string().optional(),
+            pid: z.number().optional(),
+            message: z.string().optional(),
+            error: z.string().optional(),
+          }),
+        ])).meta({ sensitive: true }),
+      }),
       description: "Command result or detached session identity",
       lifetime: "7d",
       garbageCollection: 10,
     },
     attach: {
-      schema: Execution,
+      schema: z.object({
+        status: z.enum(["exited", "detached"]),
+        exitCode: z.number().int().nullable(),
+        sessionId: z.string().nullable(),
+        stdoutBytes: z.number().int().nonnegative(),
+        stderrBytes: z.number().int().nonnegative(),
+        controls: z.array(z.discriminatedUnion("type", [
+          z.object({ type: z.literal("exit"), exit_code: z.number().int() }),
+          z.object({
+            type: z.enum([
+              "session_info",
+              "port_opened",
+              "port_closed",
+              "debug",
+              "error",
+            ]),
+            session_id: z.string().optional(),
+            command: z.string().optional(),
+            created: z.number().optional(),
+            is_owner: z.boolean().optional(),
+            tty: z.boolean().optional(),
+            cols: z.number().optional(),
+            rows: z.number().optional(),
+            port: z.number().optional(),
+            address: z.string().optional(),
+            pid: z.number().optional(),
+            message: z.string().optional(),
+            error: z.string().optional(),
+          }),
+        ])).meta({ sensitive: true }),
+      }),
       description: "Command result or detached session identity",
       lifetime: "7d",
       garbageCollection: 10,
     },
     execHttp: {
-      schema: Execution,
+      schema: z.object({
+        status: z.enum(["exited", "detached"]),
+        exitCode: z.number().int().nullable(),
+        sessionId: z.string().nullable(),
+        stdoutBytes: z.number().int().nonnegative(),
+        stderrBytes: z.number().int().nonnegative(),
+        controls: z.array(z.discriminatedUnion("type", [
+          z.object({ type: z.literal("exit"), exit_code: z.number().int() }),
+          z.object({
+            type: z.enum([
+              "session_info",
+              "port_opened",
+              "port_closed",
+              "debug",
+              "error",
+            ]),
+            session_id: z.string().optional(),
+            command: z.string().optional(),
+            created: z.number().optional(),
+            is_owner: z.boolean().optional(),
+            tty: z.boolean().optional(),
+            cols: z.number().optional(),
+            rows: z.number().optional(),
+            port: z.number().optional(),
+            address: z.string().optional(),
+            pid: z.number().optional(),
+            message: z.string().optional(),
+            error: z.string().optional(),
+          }),
+        ])).meta({ sensitive: true }),
+      }),
       description: "Command result or detached session identity",
       lifetime: "7d",
       garbageCollection: 10,
     },
     listSessions: {
-      schema: Sessions,
+      schema: z.object({
+        sessions: z.array(z.object({
+          id: z.union([z.string(), z.number().int()]),
+          command: z.string().meta({ sensitive: true }),
+          workdir: z.string(),
+          created: z.string(),
+          bytes_per_second: z.number(),
+          is_active: z.boolean(),
+          tty: z.boolean(),
+          last_activity: z.string().optional(),
+        })),
+      }),
       description: "Exec sessions",
       lifetime: "7d",
       garbageCollection: 10,
     },
     killSession: {
-      schema: Killed,
+      schema: z.object({
+        events: z.array(z.object({
+          type: z.enum([
+            "signal",
+            "timeout",
+            "exited",
+            "killed",
+            "error",
+            "complete",
+          ]),
+          message: z.string().optional(),
+          signal: z.string().optional(),
+          pid: z.number().int().optional(),
+          exit_code: z.number().int().optional(),
+        })),
+      }),
       description: "Session termination progress",
       lifetime: "7d",
       garbageCollection: 10,
     },
     listFiles: {
-      schema: FsList,
+      schema: z.object({
+        path: z.string(),
+        entries: z.array(z.object({
+          name: z.string(),
+          path: z.string(),
+          type: z.string(),
+          size: z.number().int(),
+          mode: z.string(),
+          modTime: z.iso.datetime({ offset: true }),
+          isDir: z.boolean(),
+        })),
+        count: z.number().int().nonnegative(),
+      }),
       description: "Native filesystem directory listing",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     writeFile: {
-      schema: FsWrite,
+      schema: z.object({
+        path: z.string(),
+        size: z.number().int().nonnegative(),
+        mode: z.string(),
+      }),
       description: "Native filesystem write result",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     deleteFile: {
-      schema: FsDelete,
+      schema: z.object({
+        deleted: z.array(z.string()),
+        count: z.number().int().nonnegative(),
+      }),
       description: "Native filesystem deletion result",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     copyFile: {
-      schema: FsCopy,
+      schema: z.object({
+        copied: z.array(z.object({ source: z.string(), dest: z.string() })),
+        count: z.number().int().nonnegative(),
+        totalBytes: z.number().int().nonnegative(),
+      }),
       description: "Native filesystem copy result",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     renameFile: {
-      schema: FsRename,
+      schema: z.object({ source: z.string(), dest: z.string() }),
       description: "Native filesystem rename result",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     chmodFile: {
-      schema: FsChmod,
+      schema: z.object({
+        affected: z.array(z.object({ path: z.string(), mode: z.string() })),
+        count: z.number().int().nonnegative(),
+      }),
       description: "Native filesystem chmod result",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     chownFile: {
-      schema: FsChown,
+      schema: z.object({
+        affected: z.array(z.object({
+          path: z.string(),
+          uid: z.number().int(),
+          gid: z.number().int(),
+        })),
+        count: z.number().int().nonnegative(),
+      }),
       description: "Native filesystem chown result",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     watch: {
-      schema: WatchOutput,
+      schema: z.object({
+        events: z.array(z.object({
+          type: z.literal("event"),
+          path: z.string().optional(),
+          event: z.enum(["write", "create", "remove", "rename", "chmod"])
+            .optional(),
+          timestamp: z.string().optional(),
+          size: z.number().optional(),
+          isDir: z.boolean().optional(),
+        })),
+        truncated: z.literal(true).describe(
+          "True because observation ends at durationMs or maxEvents, not at an exhaustive filesystem boundary.",
+        ),
+      }),
       description:
         "Bounded filesystem watch events; never an exhaustive history",
       lifetime: "7d",
       garbageCollection: 10,
     },
     getNetworkPolicy: {
-      schema: NetworkPolicy,
+      schema: z.object({
+        rules: z.array(
+          z.object({
+            domain: z.string().optional(),
+            action: z.enum(["allow", "deny"]).optional(),
+            include: z.string().optional(),
+          }).refine(
+            (rule) =>
+              !(rule.domain !== undefined && rule.include !== undefined),
+            {
+              message: "A network rule cannot contain both domain and include.",
+            },
+          ),
+        ),
+      }),
       description: "Sprite network policy",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     getPrivilegesPolicy: {
-      schema: PrivilegesPolicy,
+      schema: z.object({
+        profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
+        devices: z.array(z.string()).optional(),
+        noNewPrivileges: z.boolean().optional(),
+      }),
       description: "Sprite privilege policy",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     getResourcesPolicy: {
-      schema: ResourcesPolicy,
+      schema: z.object({
+        memory: z.object({
+          limit_mb: z.number().positive(),
+          autoscale: z.boolean().optional(),
+        }).optional(),
+      }),
       description: "Sprite resource policy",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     watchPorts: {
-      schema: PortWatchOutput,
+      schema: z.object({
+        initialPorts: z.array(z.object({
+          type: z.enum(["port_opened", "port_closed"]),
+          port: z.number().int().min(1).max(65535),
+          address: z.string(),
+          pid: z.number().int(),
+        })).max(100000).describe(
+          "Initial listening-port snapshot; a native null snapshot is normalized to an empty array.",
+        ),
+        notifications: z.array(z.object({
+          type: z.enum(["port_opened", "port_closed"]),
+          port: z.number().int().min(1).max(65535),
+          address: z.string(),
+          pid: z.number().int(),
+        })).max(100000),
+        truncated: z.literal(true).describe(
+          "True because observation ends at durationMs or maxEvents, not at an exhaustive event boundary.",
+        ),
+      }),
       description:
         "Initial listening-port snapshot and bounded incremental notifications",
       lifetime: "7d",
       garbageCollection: 10,
     },
     proxy: {
-      schema: ProxyOutput,
+      schema: z.object({
+        localAddress: z.literal("127.0.0.1"),
+        localPort: z.number().int().min(1).max(65535),
+        remoteHost: z.string(),
+        remotePort: z.number().int().min(1).max(65535),
+        acceptedConnections: z.number().int().nonnegative(),
+        completedConnections: z.number().int().nonnegative(),
+        rejectedConnections: z.number().int().nonnegative(),
+        bytesFromClients: z.number().int().nonnegative(),
+        bytesFromRemote: z.number().int().nonnegative(),
+        durationMs: z.number().int().positive(),
+        closed: z.literal(true),
+      }),
       description: "Closed loopback TCP proxy observation",
       lifetime: "7d",
       garbageCollection: 10,
     },
     listServices: {
-      schema: Services,
+      schema: z.object({
+        services: z.array(z.object({
+          name: z.string(),
+          cmd: z.string(),
+          args: z.array(z.string()).nullable(),
+          env: z.record(z.string(), z.string()).meta({
+            sensitive: true,
+          }).optional(),
+          dir: z.string().optional(),
+          needs: z.array(z.string()).nullable(),
+          http_port: z.number().int().nullable().optional(),
+          state: z.object({
+            name: z.string(),
+            status: z.enum([
+              "stopped",
+              "starting",
+              "running",
+              "stopping",
+              "failed",
+            ]),
+            pid: z.number().int().optional(),
+            started_at: z.string().optional(),
+            error: z.string().optional(),
+            restart_count: z.number().int().nonnegative().optional(),
+            next_restart_at: z.string().optional(),
+          }).nullish(),
+        })),
+      }),
       description: "Configured Sprite services",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     listTasks: {
-      schema: Tasks,
+      schema: z.object({
+        tasks: z.array(z.object({
+          name: z.string(),
+          started_at: z.iso.datetime({ offset: true }),
+          expires_at: z.iso.datetime({ offset: true }),
+        })),
+      }),
       description:
         "Observed task holds; this snapshot does not keep a Sprite awake",
       lifetime: "7d",
       garbageCollection: 10,
     },
     gatewayList: {
-      schema: GatewayList,
+      schema: z.object({
+        connections: z.array(
+          z.looseObject({
+            provider: z.string().optional(),
+            display_name: z.string().optional(),
+            description: z.string().optional(),
+            gateway_base_url: z.string().optional(),
+            scopes: z.json().optional(),
+            usage_snippet: z.string().optional(),
+            request_scopes_url: z.string().optional(),
+          }).describe(
+            "Source-defined configured gateway entry. Known fields are typed and unpublished provider metadata is retained.",
+          ),
+        ),
+        available: z.array(
+          z.looseObject({
+            setup_url: z.string().optional(),
+          }).describe(
+            "Source-defined available-provider entry. setup_url is known and unpublished provider metadata is retained.",
+          ),
+        ),
+      }),
       description:
         "Gateway connections and available providers with source-defined open metadata",
       lifetime: "infinite",
       garbageCollection: 10,
     },
     gatewayRequest: {
-      schema: GatewayResponse,
+      schema: z.object({
+        status: z.number().int().min(100).max(599),
+        statusText: z.string(),
+        headers: z.record(z.string(), z.array(z.string())).meta({
+          sensitive: true,
+        }),
+        bodyBytes: z.number().int().nonnegative(),
+      }),
       description: "Provider HTTP status and response headers",
       lifetime: "7d",
       garbageCollection: 10,
@@ -563,7 +876,24 @@ export const model = {
   methods: {
     create: {
       description: "Create the configured Sprite",
-      arguments: CreateArgs,
+      arguments: z.object({
+        config: z.object({
+          ram_mb: z.number().positive().optional(),
+          cpus: z.number().positive().optional(),
+          region: z.string().min(1).optional(),
+          storage_gb: z.number().positive().optional(),
+        }).optional(),
+        environment: z.record(z.string(), z.string()).optional().meta({
+          sensitive: true,
+        }),
+        url_settings: z.object({
+          auth: z.enum(["sprite", "public"]).optional(),
+          private_access: z.enum(["admins", "org_users"]).optional(),
+        }).optional(),
+        labels: z.array(z.string()).optional(),
+        wait_for_capacity: z.boolean().optional(),
+        runtime: z.enum(["default", "dev"]).optional(),
+      }),
       execute: (args: z.output<typeof CreateArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -605,7 +935,19 @@ export const model = {
     },
     update: {
       description: "Update the configured Sprite",
-      arguments: UpdateArgs,
+      arguments: z.object({
+        url_settings: z.object({
+          auth: z.enum(["sprite", "public"]).optional(),
+          private_access: z.enum(["admins", "org_users"]).optional(),
+        }).optional(),
+        labels: z.array(z.string()).optional(),
+      }).refine(
+        (value) =>
+          value.url_settings !== undefined || value.labels !== undefined,
+        {
+          message: "Provide url_settings or labels.",
+        },
+      ),
       execute: (args: z.output<typeof UpdateArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -753,7 +1095,81 @@ export const model = {
     controlExec: {
       description:
         "Run bounded sequential exec operations over one persistent WebSocket",
-      arguments: ControlArgs,
+      arguments: z.object({
+        operations: z.array(
+          z.object({
+            cmd: z.array(z.string()).min(1).describe(
+              "Program and argv, encoded as repeated cmd parameters.",
+            ),
+            dir: z.string().optional(),
+            env: z.record(z.string(), z.string()).optional().meta({
+              sensitive: true,
+            }),
+            input: z.discriminatedUnion("kind", [
+              z.object({ kind: z.literal("text"), text: z.string() }),
+              z.object({ kind: z.literal("base64"), base64: z.base64() }),
+            ]).optional().meta({ sensitive: true }),
+            failOnNonZero: z.boolean().default(true),
+            tty: z.boolean().default(false),
+            rows: z.number().int().min(1).max(65535).optional(),
+            cols: z.number().int().min(1).max(65535).optional(),
+            closeStdin: z.boolean().default(true),
+            actions: z.array(z.discriminatedUnion("type", [
+              z.object({
+                type: z.literal("stdin"),
+                atMs: z.number().int().nonnegative().max(2147483647),
+                input: z.discriminatedUnion("kind", [
+                  z.object({ kind: z.literal("text"), text: z.string() }),
+                  z.object({ kind: z.literal("base64"), base64: z.base64() }),
+                ]),
+              }),
+              z.object({
+                type: z.literal("eof"),
+                atMs: z.number().int().nonnegative().max(2147483647),
+              }),
+              z.object({
+                type: z.literal("resize"),
+                atMs: z.number().int().nonnegative().max(2147483647),
+                rows: z.number().int().min(1).max(65535),
+                cols: z.number().int().min(1).max(65535),
+              }),
+              z.object({
+                type: z.literal("signal"),
+                atMs: z.number().int().nonnegative().max(2147483647),
+                signal: z.string().min(1),
+              }),
+            ])).default([]).meta({ sensitive: true }).transform((actions) =>
+              actions.toSorted((a, b) => a.atMs - b.atMs)
+            ),
+          }).strict().superRefine((operation, ctx) => {
+            const issue = (message: string): void =>
+              ctx.addIssue({ code: "custom", message });
+            if (
+              !operation.tty &&
+              (operation.rows !== undefined || operation.cols !== undefined)
+            ) {
+              issue("Control exec rows and cols require a TTY operation.");
+            }
+            let eof = false;
+            for (const action of operation.actions) {
+              if (action.type === "resize" && !operation.tty) {
+                issue("Control exec resize requires a TTY operation.");
+              }
+              if (action.type === "eof" && operation.tty) {
+                issue("Control exec EOF is unsupported for TTY operations.");
+              }
+              if (action.type === "eof") {
+                if (eof) {
+                  issue("Control exec accepts at most one EOF action.");
+                }
+                eof = true;
+              } else if (action.type === "stdin" && eof) {
+                issue("Control exec cannot send stdin after EOF.");
+              }
+            }
+          }),
+        ).min(1).max(100),
+      }),
       execute: (
         args: z.output<typeof ControlArgs>,
         ctx: RuntimeSpriteContext,
@@ -775,7 +1191,63 @@ export const model = {
     exec: {
       description:
         "Execute a command over WebSocket with binary output and optional TTY controls",
-      arguments: ExecArgs,
+      arguments: z.object({
+        cmd: z.array(z.string()).min(1).describe(
+          "Program and argv, encoded as repeated cmd parameters.",
+        ),
+        path: z.string().optional(),
+        dir: z.string().optional(),
+        env: z.record(z.string(), z.string()).optional().meta({
+          sensitive: true,
+        }),
+        input: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("text"), text: z.string() }),
+          z.object({ kind: z.literal("base64"), base64: z.base64() }),
+        ]).optional().meta({
+          sensitive: true,
+        }),
+        failOnNonZero: z.boolean().optional().default(true),
+        tty: z.boolean().optional().default(false),
+        rows: z.number().int().min(1).max(65535).optional(),
+        cols: z.number().int().min(1).max(65535).optional(),
+        detachable: z.boolean().optional().default(false),
+        cc: z.boolean().optional().default(false),
+        max_run_after_disconnect: z.string().optional(),
+        closeStdin: z.boolean().optional().default(true),
+        actions: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdin"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+            input: z.discriminatedUnion("kind", [
+              z.object({ kind: z.literal("text"), text: z.string() }),
+              z.object({ kind: z.literal("base64"), base64: z.base64() }),
+            ]),
+          }),
+          z.object({
+            type: z.literal("eof"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+          }),
+          z.object({
+            type: z.literal("resize"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+            rows: z.number().int().min(1).max(65535),
+            cols: z.number().int().min(1).max(65535),
+          }),
+          z.object({
+            type: z.literal("signal"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+            signal: z.string().min(1),
+          }),
+        ])).optional().default([]).meta({ sensitive: true }),
+        detachAfterMs: z.number().int().positive().max(2147483647).optional()
+          .describe(
+            "Save session identity and disconnect after this duration instead of waiting for exit.",
+          ),
+      }).refine(
+        (args) =>
+          args.tty || (args.rows === undefined && args.cols === undefined),
+        "Exec rows and cols require a TTY session.",
+      ),
       execute: (args: z.output<typeof ExecArgs>, ctx: RuntimeSpriteContext) =>
         runMethod(
           ctx,
@@ -793,7 +1265,56 @@ export const model = {
     attach: {
       description:
         "Attach to an existing exec session and exchange input, output, and controls",
-      arguments: AttachArgs,
+      arguments: z.object({
+        session_id: z.string().min(1),
+        input: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("text"), text: z.string() }),
+          z.object({ kind: z.literal("base64"), base64: z.base64() }),
+        ]).optional().meta({
+          sensitive: true,
+        }),
+        failOnNonZero: z.boolean().optional().default(true),
+        tty: z.boolean().optional().default(false),
+        rows: z.number().int().min(1).max(65535).optional(),
+        cols: z.number().int().min(1).max(65535).optional(),
+        detachable: z.boolean().optional().default(false),
+        cc: z.boolean().optional().default(false),
+        max_run_after_disconnect: z.string().optional(),
+        closeStdin: z.boolean().optional().default(true),
+        actions: z.array(z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("stdin"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+            input: z.discriminatedUnion("kind", [
+              z.object({ kind: z.literal("text"), text: z.string() }),
+              z.object({ kind: z.literal("base64"), base64: z.base64() }),
+            ]),
+          }),
+          z.object({
+            type: z.literal("eof"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+          }),
+          z.object({
+            type: z.literal("resize"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+            rows: z.number().int().min(1).max(65535),
+            cols: z.number().int().min(1).max(65535),
+          }),
+          z.object({
+            type: z.literal("signal"),
+            atMs: z.number().int().nonnegative().max(2147483647),
+            signal: z.string().min(1),
+          }),
+        ])).optional().default([]).meta({ sensitive: true }),
+        detachAfterMs: z.number().int().positive().max(2147483647).optional()
+          .describe(
+            "Save session identity and disconnect after this duration instead of waiting for exit.",
+          ),
+      }).refine(
+        (args) =>
+          args.tty || (args.rows === undefined && args.cols === undefined),
+        "Exec rows and cols require a TTY session.",
+      ),
       execute: (args: z.output<typeof AttachArgs>, ctx: RuntimeSpriteContext) =>
         runMethod(
           ctx,
@@ -811,7 +1332,23 @@ export const model = {
     execHttp: {
       description:
         "Execute over HTTP/1.1 while preserving provider chunk framing",
-      arguments: HttpExecArgs,
+      arguments: z.object({
+        cmd: z.array(z.string()).min(1).describe(
+          "Program and argv, encoded as repeated cmd parameters.",
+        ),
+        path: z.string().optional(),
+        dir: z.string().optional(),
+        env: z.record(z.string(), z.string()).optional().meta({
+          sensitive: true,
+        }),
+        input: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("text"), text: z.string() }),
+          z.object({ kind: z.literal("base64"), base64: z.base64() }),
+        ]).optional().meta({
+          sensitive: true,
+        }),
+        failOnNonZero: z.boolean().optional().default(true),
+      }),
       execute: (
         args: z.output<typeof HttpExecArgs>,
         ctx: RuntimeSpriteContext,
@@ -901,7 +1438,12 @@ export const model = {
     },
     listFiles: {
       description: "List a Sprite directory",
-      arguments: ListFilesArgs,
+      arguments: z.object({
+        workingDir: z.string().min(1).optional().default("/"),
+        path: z.string().min(1),
+        recursive: z.boolean().optional(),
+        pattern: z.string().optional(),
+      }),
       execute: (args: z.output<typeof ListFilesArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -916,7 +1458,10 @@ export const model = {
     },
     readFile: {
       description: "Read raw bytes from a Sprite file",
-      arguments: ReadFileArgs,
+      arguments: z.object({
+        workingDir: z.string().min(1).optional().default("/"),
+        path: z.string().min(1),
+      }),
       execute: (args: z.output<typeof ReadFileArgs>, ctx: SpriteContext) =>
         runMethod(ctx, methodDescription("readFile"), null, async () => {
           const response = await request(ctx, "GET", fsPath(ctx, "read"), {
@@ -934,7 +1479,18 @@ export const model = {
     },
     writeFile: {
       description: "Write raw bytes to a Sprite file",
-      arguments: WriteFileArgs,
+      arguments: z.object({
+        workingDir: z.string().min(1).optional().default("/"),
+        path: z.string().min(1),
+        content: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("text"), text: z.string() }),
+          z.object({ kind: z.literal("base64"), base64: z.base64() }),
+        ]).meta({
+          sensitive: true,
+        }),
+        mode: z.string().regex(/^[0-7]{3,4}$/).optional(),
+        mkdir: z.boolean().optional(),
+      }),
       execute: (args: z.output<typeof WriteFileArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -958,7 +1514,12 @@ export const model = {
     },
     deleteFile: {
       description: "Delete a Sprite file or directory",
-      arguments: DeleteFileArgs,
+      arguments: z.object({
+        workingDir: z.string().min(1).optional().default("/"),
+        path: z.string().min(1),
+        recursive: z.boolean().optional().default(false),
+        asRoot: z.boolean().optional().default(false),
+      }),
       execute: (args: z.output<typeof DeleteFileArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -975,7 +1536,14 @@ export const model = {
     },
     copyFile: {
       description: "Copy a Sprite file or directory",
-      arguments: CopyFileArgs,
+      arguments: z.object({
+        source: z.string().min(1),
+        dest: z.string().min(1),
+        preserveAttrs: z.boolean().optional().default(false),
+        workingDir: z.string().min(1).optional().default("/"),
+        recursive: z.boolean().optional().default(false),
+        asRoot: z.boolean().optional().default(false),
+      }),
       execute: (args: z.output<typeof CopyFileArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -992,7 +1560,12 @@ export const model = {
     },
     renameFile: {
       description: "Rename a Sprite file or directory",
-      arguments: RenameFileArgs,
+      arguments: z.object({
+        source: z.string().min(1),
+        dest: z.string().min(1),
+        workingDir: z.string().min(1).optional().default("/"),
+        asRoot: z.boolean().optional().default(false),
+      }),
       execute: (args: z.output<typeof RenameFileArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -1009,7 +1582,13 @@ export const model = {
     },
     chmodFile: {
       description: "Change Sprite file permissions",
-      arguments: ChmodFileArgs,
+      arguments: z.object({
+        workingDir: z.string().min(1).optional().default("/"),
+        path: z.string().min(1),
+        recursive: z.boolean().optional().default(false),
+        asRoot: z.boolean().optional().default(false),
+        mode: z.string().regex(/^[0-7]{3,4}$/),
+      }),
       execute: (args: z.output<typeof ChmodFileArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -1026,7 +1605,16 @@ export const model = {
     },
     chownFile: {
       description: "Change Sprite file ownership",
-      arguments: ChownFileArgs,
+      arguments: z.object({
+        workingDir: z.string().min(1).optional().default("/"),
+        path: z.string().min(1),
+        recursive: z.boolean().optional().default(false),
+        asRoot: z.boolean().optional().default(false),
+        uid: z.number().int().nonnegative().optional(),
+        gid: z.number().int().nonnegative().optional(),
+      }).refine((value) => value.uid !== undefined || value.gid !== undefined, {
+        message: "Provide uid or gid.",
+      }),
       execute: (args: z.output<typeof ChownFileArgs>, ctx: SpriteContext) =>
         runMethod(
           ctx,
@@ -1044,7 +1632,15 @@ export const model = {
     watch: {
       description:
         "Observe acknowledged Sprite filesystem events for a bounded duration",
-      arguments: WatchArgs,
+      arguments: z.object({
+        paths: z.array(z.string()).min(1),
+        recursive: z.boolean().optional().default(false),
+        workingDir: z.string().min(1).optional().default("/"),
+        durationMs: z.number().int().positive().max(2147483647),
+        maxEvents: z.number().int().positive().max(100000).optional().default(
+          1000,
+        ),
+      }),
       execute: (args: z.output<typeof WatchArgs>, ctx: RuntimeSpriteContext) =>
         runMethod(
           ctx,
@@ -1074,7 +1670,21 @@ export const model = {
     },
     setNetworkPolicy: {
       description: "Replace the Sprite network policy",
-      arguments: SetNetworkPolicyArgs,
+      arguments: z.object({
+        rules: z.array(
+          z.object({
+            domain: z.string().optional(),
+            action: z.enum(["allow", "deny"]).optional(),
+            include: z.string().optional(),
+          }).refine(
+            (rule) =>
+              !(rule.domain !== undefined && rule.include !== undefined),
+            {
+              message: "A network rule cannot contain both domain and include.",
+            },
+          ),
+        ),
+      }),
       execute: (
         args: z.output<typeof SetNetworkPolicyArgs>,
         ctx: SpriteContext,
@@ -1114,7 +1724,11 @@ export const model = {
     },
     setPrivilegesPolicy: {
       description: "Set the Sprite privilege policy",
-      arguments: SetPrivilegesPolicyArgs,
+      arguments: z.object({
+        profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
+        devices: z.array(z.string()).optional(),
+        noNewPrivileges: z.boolean().optional(),
+      }),
       execute: (
         args: z.output<typeof SetPrivilegesPolicyArgs>,
         ctx: SpriteContext,
@@ -1172,7 +1786,12 @@ export const model = {
     },
     setResourcesPolicy: {
       description: "Set the Sprite resource policy",
-      arguments: SetResourcesPolicyArgs,
+      arguments: z.object({
+        memory: z.object({
+          limit_mb: z.number().positive(),
+          autoscale: z.boolean().optional(),
+        }).optional(),
+      }),
       execute: (
         args: z.output<typeof SetResourcesPolicyArgs>,
         ctx: SpriteContext,
@@ -1213,7 +1832,14 @@ export const model = {
     watchPorts: {
       description:
         "Observe a Sprite listening-port snapshot and bounded open/close notifications",
-      arguments: PortWatchArgs,
+      arguments: z.object({
+        durationMs: z.number().int().positive().max(2147483647),
+        maxEvents: z.number().int().positive().max(100000).optional().default(
+          1000,
+        ).describe(
+          "Maximum incremental notifications; initial snapshot entries do not count toward this limit.",
+        ),
+      }),
       execute: (
         args: z.output<typeof PortWatchArgs>,
         ctx: RuntimeSpriteContext,
@@ -1228,7 +1854,20 @@ export const model = {
     },
     proxy: {
       description: "Run a bounded loopback-only TCP proxy through the Sprite",
-      arguments: ProxyArgs,
+      arguments: z.object({
+        localPort: z.number().int().min(1).max(65535).describe(
+          "Required port bound only on the IPv4 loopback interface.",
+        ),
+        host: z.string().min(1).describe(
+          "Remote host reached from inside the Sprite.",
+        ),
+        port: z.number().int().min(1).max(65535).describe(
+          "Remote TCP port reached from inside the Sprite.",
+        ),
+        durationMs: z.number().int().positive().max(2147483647),
+        maxConnections: z.number().int().positive().max(1024).optional()
+          .default(32),
+      }),
       execute: (args: z.output<typeof ProxyArgs>, ctx: RuntimeSpriteContext) =>
         runMethod(
           ctx,
@@ -1289,7 +1928,41 @@ export const model = {
     gatewayRequest: {
       description:
         "Relay one provider path through a configured Sprite connector",
-      arguments: GatewayRequestArgs,
+      arguments: z.object({
+        provider: z.string().min(1),
+        connection_id: z.string().min(1),
+        providerPath: z.string().min(1).refine(
+          (value) => {
+            if (
+              !value.startsWith("/") || value.startsWith("//") ||
+              /[\\\r\n#]/.test(value)
+            ) return false;
+            const pathname = value.split("?", 1)[0];
+            try {
+              return pathname.split("/").every((part) => {
+                const decoded = decodeURIComponent(part);
+                return decoded !== "." && decoded !== ".." &&
+                  !decoded.includes("/") && !decoded.includes("\\");
+              });
+            } catch {
+              return false;
+            }
+          },
+          "providerPath must be an absolute provider path without a host, traversal, fragment, or header sequence.",
+        ),
+        method: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).refine(
+          (value) => value.toUpperCase() !== "CONNECT",
+          "CONNECT establishes a tunnel; use proxy instead of the HTTP relay.",
+        ),
+        headers: z.record(z.string(), z.string()).meta({ sensitive: true })
+          .optional().default({}),
+        input: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("text"), text: z.string() }),
+          z.object({ kind: z.literal("base64"), base64: z.base64() }),
+        ]).optional().meta({
+          sensitive: true,
+        }),
+      }),
       execute: (
         args: z.output<typeof GatewayRequestArgs>,
         ctx: RuntimeSpriteContext,
