@@ -3,17 +3,12 @@
 import { z } from "npm:zod@4.4.3";
 import {
   apiUrl,
-  BinaryFile,
   concatenate,
   type Context,
   decodeFrame,
   Input,
   inputBytes,
-  jsonRequest,
-  method,
-  ndjson,
   type Query,
-  resource,
   segment,
   withHandles,
 } from "./core.ts";
@@ -104,7 +99,7 @@ export const ExecControl = z.discriminatedUnion("type", [
     error: z.string().optional(),
   }),
 ]);
-const Execution = z.object({
+export const Execution = z.object({
   status: z.enum(["exited", "detached"]),
   exitCode: z.number().int().nullable(),
   sessionId: z.string().nullable(),
@@ -122,15 +117,15 @@ const Session = z.object({
   tty: z.boolean(),
   last_activity: z.string().optional(),
 });
-const Sessions = z.object({ sessions: z.array(Session) });
-const KillEvent = z.object({
+export const Sessions = z.object({ sessions: z.array(Session) });
+export const KillEvent = z.object({
   type: z.enum(["signal", "timeout", "exited", "killed", "error", "complete"]),
   message: z.string().optional(),
   signal: z.string().optional(),
   pid: z.number().int().optional(),
   exit_code: z.number().int().optional(),
 });
-const Killed = z.object({ events: z.array(KillEvent) });
+export const Killed = z.object({ events: z.array(KillEvent) });
 /** Socket outcome includes bytes plus explicit exit or detach state. */
 export type SocketResult = Omit<CommandResult, "exitCode"> & {
   exitCode: number | null;
@@ -656,129 +651,16 @@ export async function saveExecution(
   );
   return withHandles(data, [stdout, stderr]);
 }
-async function runSocket(
+export async function runSocketExecution(
   ctx: SpriteContext,
   args: Parameters<typeof executeSocket>[1],
+  execute: typeof executeSocket = executeSocket,
 ) {
   await verifySprite(ctx);
   return await saveExecution(
     ctx,
-    await executeSocket(ctx, args),
+    await execute(ctx, args),
     args.failOnNonZero,
     "session_id" in args ? "attach" : "exec",
   );
 }
-export const execResources = {
-  exec: resource(
-    Execution,
-    "Command result or detached session identity",
-    "7d",
-  ),
-  attach: resource(
-    Execution,
-    "Command result or detached session identity",
-    "7d",
-  ),
-  execHttp: resource(
-    Execution,
-    "Command result or detached session identity",
-    "7d",
-  ),
-  listSessions: resource(Sessions, "Exec sessions", "7d"),
-  killSession: resource(Killed, "Session termination progress", "7d"),
-};
-/** Separate binary stdout/stderr files avoid encoding loss. */
-export const execFiles = {
-  execStdout: BinaryFile,
-  execStderr: BinaryFile,
-  attachStdout: BinaryFile,
-  attachStderr: BinaryFile,
-  execHttpStdout: BinaryFile,
-  execHttpStderr: BinaryFile,
-};
-/** All HTTP and WebSocket execution methods. */
-export const execMethods = {
-  exec: method(
-    "Execute a command over WebSocket with binary output and optional TTY controls",
-    ExecArgs,
-    "exec",
-    Execution,
-    (args, ctx: SpriteContext) => runSocket(ctx, args),
-  ),
-  attach: method(
-    "Attach to an existing exec session and exchange input, output, and controls",
-    AttachArgs,
-    "attach",
-    Execution,
-    (args, ctx: SpriteContext) => runSocket(ctx, args),
-  ),
-  execHttp: method(
-    "Execute over HTTP/1.1 while preserving provider chunk framing",
-    CommandArgs,
-    "execHttp",
-    Execution,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      const result = await executeHttp(ctx, ctx.globalArgs.name, {
-        cmd: args.cmd,
-        path: args.path,
-        dir: args.dir,
-        env: envPairs(args.env),
-        stdin: args.input !== undefined,
-      }, inputBytes(args.input));
-      return await saveExecution(
-        ctx,
-        {
-          ...result,
-          status: "exited",
-          sessionId: null,
-          controls: [],
-        },
-        args.failOnNonZero,
-        "execHttp",
-      );
-    },
-  ),
-  listSessions: method(
-    "List exec sessions",
-    z.object({}),
-    "listSessions",
-    Sessions,
-    (_args, ctx: SpriteContext) =>
-      jsonRequest(
-        ctx,
-        "GET",
-        spritePath(ctx.globalArgs.name, "/exec"),
-        Sessions,
-      ),
-  ),
-  killSession: method(
-    "Kill an exec session",
-    z.object({
-      session_id: z.string().min(1),
-      signal: z.string().optional(),
-      timeout: z.string().optional(),
-    }),
-    "killSession",
-    Killed,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      const events = await ndjson(
-        ctx,
-        "POST",
-        spritePath(
-          ctx.globalArgs.name,
-          `/exec/${segment(args.session_id)}/kill`,
-        ),
-        KillEvent,
-        { query: { signal: args.signal, timeout: args.timeout } },
-      );
-      if (!events.some((event) => event.type === "complete")) {
-        throw new Error(
-          "Session kill stream ended without completion.",
-        );
-      }
-      return { events };
-    },
-  ),
-};

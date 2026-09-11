@@ -1,17 +1,7 @@
 // SPDX-License-Identifier: MIT
-/** Sprite service configuration, lifecycle, and logs. @module */
+/** Sprite service protocol schemas and streaming. @module */
 import { z } from "npm:zod@4.4.3";
-import {
-  type Context,
-  Empty,
-  Environment,
-  jsonRequest,
-  method,
-  ndjson,
-  requireComplete,
-  resource,
-} from "./core.ts";
-import { type SpriteContext, spritePath } from "./sprite.ts";
+import { type Context, Environment, ndjson, requireComplete } from "./core.ts";
 
 const ServiceState = z.object({
   name: z.string(),
@@ -67,9 +57,7 @@ const ServiceEvent = z.discriminatedUnion("type", [
     log_files: z.record(z.string(), z.string()).optional(),
   }),
 ]);
-const Services = z.object({
-  services: z.array(Service),
-});
+export const Services = z.object({ services: z.array(Service) });
 export const ServiceEvents = z.object({
   events: z.array(ServiceEvent),
   truncated: z.boolean().describe(
@@ -98,29 +86,5 @@ export async function serviceStream(
       );
     }
   }
-  return {
-    events: requireComplete(events, path),
-    truncated: kind === "logs",
-  };
+  return { events: requireComplete(events, path), truncated: kind === "logs" };
 }
-
-export const servicesResources = {
-  listServices: resource(Services, "Configured Sprite services"),
-};
-
-export const servicesMethods = {
-  listServices: method(
-    "List configured Sprite services",
-    Empty,
-    "listServices",
-    Services,
-    async (_args, ctx: SpriteContext) => ({
-      services: await jsonRequest(
-        ctx,
-        "GET",
-        spritePath(ctx.globalArgs.name, "/services"),
-        z.array(Service),
-      ),
-    }),
-  ),
-};

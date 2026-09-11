@@ -9,7 +9,7 @@ import {
   sprite,
   testContext,
 } from "./_lib/test_support.ts";
-import { createMethods, model } from "./service.ts";
+import { model } from "./service.ts";
 import { type Context } from "./_lib/core.ts";
 import { type ManagementExec } from "./_lib/local-api.ts";
 const globalArgs = { ...childArgs, service_name: "web/API" };
@@ -269,9 +269,10 @@ Deno.test("service signal uses fixed local route and stdin JSON", async () => {
       exitCode: 0,
     });
   };
+  Object.assign(test, { managementExec: execute });
   const { calls } = await withMockedFetch(
     [json(sprite)],
-    () => createMethods(execute).signal.execute({ signal: "USR1" }, test),
+    () => model.methods.signal.execute({ signal: "USR1" }, test),
   );
   assertEquals(calls.length, 1);
   assertEquals(called, 1);
@@ -280,18 +281,19 @@ Deno.test("service signal uses fixed local route and stdin JSON", async () => {
 Deno.test("service signal refuses missing or replaced identity before exec", async () => {
   for (const bound of [false, true]) {
     let called = 0;
-    const methods = createMethods(() => {
+    const execute: ManagementExec = () => {
       called++;
       throw new Error("must not execute");
-    });
+    };
     const test = testContext(globalArgs, {
       storedResources: bound ? { state: { ...service, sprite: parent } } : {},
     });
+    Object.assign(test, { managementExec: execute });
     await withMockedFetch(
       bound ? [json({ ...sprite, id: "replacement" })] : [],
       () =>
         assertRejects(
-          () => methods.signal.execute({ signal: "USR1" }, test),
+          () => model.methods.signal.execute({ signal: "USR1" }, test),
           Error,
           bound ? "replaced" : "No Sprite identity is saved",
         ),

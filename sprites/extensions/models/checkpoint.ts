@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: MIT
 /** One named slot holding a Sprite checkpoint. @module */
 import { z } from "npm:zod@4.4.3";
-import {
-  Empty,
-  jsonRequest,
-  method,
-  resource,
-  segment,
-  withHandles,
-} from "./_lib/core.ts";
+import { jsonRequest, runMethod, segment, withHandles } from "./_lib/core.ts";
 import {
   Checkpoint,
   CheckpointEvents,
@@ -17,19 +10,36 @@ import {
 import {
   bindSprite,
   boundSprite,
-  ChildArgsSchema,
   type ChildContext,
   SpriteIdentity,
   spritePath,
 } from "./_lib/sprite.ts";
 
-const CheckpointArgsSchema = ChildArgsSchema.extend({
+const CheckpointArgsSchema = z.object({
+  token: z.string().meta({ sensitive: true }).min(1).regex(
+    /^[\x21-\x7e]+$/,
+    "Use a bearer token without spaces or control characters.",
+  ).describe("Organization token; use a vault reference."),
+  baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+    .optional().default("https://api.sprites.dev"),
+  timeoutMs: z.number().int().min(1).max(2_147_483_647).optional().default(
+    300_000,
+  ),
+  maxResponseBytes: z.number().int().min(1).max(1_073_741_824).optional()
+    .default(
+      67_108_864,
+    ),
+  sprite: z.string().min(1).describe("Name of the Sprite this belongs to."),
   name: z.string().min(1).describe(
     "Local slot name for a saved checkpoint id.",
   ),
 });
 const CheckpointRecord = Checkpoint.extend({ sprite: SpriteIdentity });
 
+function methodDescription(name: string): string {
+  const methods: Record<string, { description: string }> = model.methods;
+  return methods[name].description;
+}
 function path(ctx: ChildContext, id: string, suffix = ""): string {
   return spritePath(
     ctx.globalArgs.sprite,
@@ -56,91 +66,123 @@ export const model = {
   version: "2026.09.11.1",
   globalArguments: CheckpointArgsSchema,
   resources: {
-    state: resource(
-      CheckpointRecord,
-      "Saved checkpoint and its Sprite identity",
-    ),
-    create: resource(CheckpointEvents, "Checkpoint creation progress", "7d"),
-    restore: resource(
-      CheckpointEvents,
-      "Checkpoint restoration progress",
-      "7d",
-    ),
+    state: {
+      schema: CheckpointRecord,
+      description: "Saved checkpoint and its Sprite identity",
+      lifetime: "infinite",
+      garbageCollection: 10,
+    },
+    create: {
+      schema: CheckpointEvents,
+      description: "Checkpoint creation progress",
+      lifetime: "7d",
+      garbageCollection: 10,
+    },
+    restore: {
+      schema: CheckpointEvents,
+      description: "Checkpoint restoration progress",
+      lifetime: "7d",
+      garbageCollection: 10,
+    },
   },
   methods: {
-    create: method(
-      "Take a fresh checkpoint and point this slot at it; a bound slot is retaken and its old id stays in history",
-      z.object({ comment: z.string().optional() }),
-      "state",
-      CheckpointRecord,
-      async (args, ctx: ChildContext) => {
-        const sprite = await bindSprite(ctx);
-        const events = await checkpointStream(
+    create: {
+      description:
+        "Take a fresh checkpoint and point this slot at it; a bound slot is retaken and its old id stays in history",
+      arguments: z.object({ comment: z.string().optional() }),
+      execute: (args: { comment?: string }, ctx: ChildContext) =>
+        runMethod(
           ctx,
-          spritePath(ctx.globalArgs.sprite, "/checkpoint"),
-          args,
-        );
-        // The complete event carries progress text, not the new id, so take the newest listed
-        // checkpoint. A checkpoint someone else creates at the same moment could win that race.
-        const checkpoints = await jsonRequest(
+          methodDescription("create"),
+          "state",
+          CheckpointRecord,
+          async () => {
+            const sprite = await bindSprite(ctx);
+            const events = await checkpointStream(
+              ctx,
+              spritePath(ctx.globalArgs.sprite, "/checkpoint"),
+              args,
+            );
+            // The complete event carries progress text, not the new id, so take the newest listed
+            // checkpoint. A checkpoint someone else creates at the same moment could win that race.
+            const checkpoints = await jsonRequest(
+              ctx,
+              "GET",
+              spritePath(ctx.globalArgs.sprite, "/checkpoints"),
+              z.array(Checkpoint),
+            );
+            const newest = checkpoints.reduce<
+              z.output<typeof Checkpoint> | undefined
+            >(
+              (latest, candidate) =>
+                !latest ||
+                  Date.parse(candidate.create_time) >
+                    Date.parse(latest.create_time)
+                  ? candidate
+                  : latest,
+              undefined,
+            );
+            if (!newest) {
+              throw new Error(
+                "Checkpoint creation completed but no checkpoint was listed.",
+              );
+            }
+            const progress = await ctx.writeResource(
+              "create",
+              "create",
+              CheckpointEvents.parse(events),
+            );
+            return withHandles({
+              ...newest,
+              sprite: { name: sprite.name, id: sprite.id },
+            }, [progress]);
+          },
+        ),
+    },
+    get: {
+      description: "Read the checkpoint id saved in this slot",
+      arguments: z.object({}),
+      execute: (_args: object, ctx: ChildContext) =>
+        runMethod(
           ctx,
-          "GET",
-          spritePath(ctx.globalArgs.sprite, "/checkpoints"),
-          z.array(Checkpoint),
-        );
-        const newest = checkpoints.reduce<
-          z.output<typeof Checkpoint> | undefined
-        >(
-          (latest, candidate) =>
-            !latest ||
-              Date.parse(candidate.create_time) > Date.parse(latest.create_time)
-              ? candidate
-              : latest,
-          undefined,
-        );
-        if (!newest) {
-          throw new Error(
-            "Checkpoint creation completed but no checkpoint was listed.",
-          );
-        }
-        const progress = await ctx.writeResource(
-          "create",
-          "create",
-          CheckpointEvents.parse(events),
-        );
-        return withHandles({
-          ...newest,
-          sprite: { name: sprite.name, id: sprite.id },
-        }, [progress]);
-      },
-    ),
-    get: method(
-      "Read the checkpoint id saved in this slot",
-      Empty,
-      "state",
-      CheckpointRecord,
-      async (_args, ctx: ChildContext) => {
-        const sprite = await boundSprite(ctx);
-        return record(ctx, await savedId(ctx), sprite);
-      },
-    ),
-    restore: method(
-      "Restore the checkpoint id saved in this slot",
-      Empty,
-      "restore",
-      CheckpointEvents,
-      async (_args, ctx: ChildContext) => {
-        await boundSprite(ctx);
-        return checkpointStream(ctx, path(ctx, await savedId(ctx), "/restore"));
-      },
-    ),
-    lookup: method(
-      "Adopt an existing checkpoint id into this slot",
-      z.object({ checkpoint_id: z.string().min(1) }),
-      "state",
-      CheckpointRecord,
-      async (args, ctx: ChildContext) =>
-        record(ctx, args.checkpoint_id, await bindSprite(ctx)),
-    ),
+          methodDescription("get"),
+          "state",
+          CheckpointRecord,
+          async () => {
+            const sprite = await boundSprite(ctx);
+            return record(ctx, await savedId(ctx), sprite);
+          },
+        ),
+    },
+    restore: {
+      description: "Restore the checkpoint id saved in this slot",
+      arguments: z.object({}),
+      execute: (_args: object, ctx: ChildContext) =>
+        runMethod(
+          ctx,
+          methodDescription("restore"),
+          "restore",
+          CheckpointEvents,
+          async () => {
+            await boundSprite(ctx);
+            return checkpointStream(
+              ctx,
+              path(ctx, await savedId(ctx), "/restore"),
+            );
+          },
+        ),
+    },
+    lookup: {
+      description: "Adopt an existing checkpoint id into this slot",
+      arguments: z.object({ checkpoint_id: z.string().min(1) }),
+      execute: (args: { checkpoint_id: string }, ctx: ChildContext) =>
+        runMethod(
+          ctx,
+          methodDescription("lookup"),
+          "state",
+          CheckpointRecord,
+          async () => record(ctx, args.checkpoint_id, await bindSprite(ctx)),
+        ),
+    },
   },
 };

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.14";
 import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
-import { createMethods } from "./tasks.ts";
+import { model } from "../sprite.ts";
+import { type ManagementExec } from "./local-api.ts";
 import { testContext } from "./test_support.ts";
 
 const globalArgs = {
@@ -36,9 +37,12 @@ const result = (
   exitCode,
 });
 function setup(stored = true) {
-  return testContext(globalArgs, {
-    storedResources: stored ? { state: sprite } : {},
-  });
+  return Object.assign(
+    testContext(globalArgs, {
+      storedResources: stored ? { state: sprite } : {},
+    }),
+    { managementExec: undefined as ManagementExec | undefined },
+  );
 }
 const identity = () => new Response(JSON.stringify(sprite));
 
@@ -52,12 +56,12 @@ Deno.test("management reads reject invalid JSON and invalid shapes", async () =>
     ]
   ) {
     const test = setup();
-    const methods = createMethods(() => Promise.resolve(result(body, 200)));
+    test.managementExec = () => Promise.resolve(result(body, 200));
     const error = await assertRejects(
       () =>
         withMockedFetch(
           [identity()],
-          () => methods.listTasks.execute({}, test),
+          () => model.methods.listTasks.execute({}, test),
         ),
       Error,
     );
@@ -69,7 +73,7 @@ Deno.test("management reads reject invalid JSON and invalid shapes", async () =>
 Deno.test("listTasks uses its local route and writes typed tasks", async () => {
   const test = setup();
   let count = 0;
-  const methods = createMethods((_ctx, name, query, input) => {
+  test.managementExec = (_ctx, name, query, input) => {
     count++;
     const cmd = query.cmd as string[];
     assertEquals(name, globalArgs.name);
@@ -84,10 +88,10 @@ Deno.test("listTasks uses its local route and writes typed tasks", async () => {
     assertEquals(query.stdin, false);
     assertEquals(new TextDecoder().decode(input), "");
     return Promise.resolve(result(JSON.stringify({ tasks: [task] }), 200));
-  });
+  };
   const { calls } = await withMockedFetch(
     [identity()],
-    () => methods.listTasks.execute({}, test),
+    () => model.methods.listTasks.execute({}, test),
   );
   assertEquals(calls.length, 1);
   assertEquals(count, 1);
@@ -98,17 +102,17 @@ Deno.test("listTasks refuses missing or replaced Sprite identity before exec", a
   for (const stored of [false, true]) {
     const test = setup(stored);
     let count = 0;
-    const methods = createMethods(() => {
+    test.managementExec = () => {
       count++;
       return Promise.resolve(result());
-    });
+    };
     await withMockedFetch(
       stored
         ? [new Response(JSON.stringify({ ...sprite, id: "replacement" }))]
         : [],
       () =>
         assertRejects(
-          () => methods.listTasks.execute({}, test),
+          () => model.methods.listTasks.execute({}, test),
           Error,
           stored ? "replaced" : "No Sprite identity is saved",
         ),

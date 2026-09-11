@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { method } from "./core.ts";
-import { z } from "npm:zod@4.4.3";
+import { runMethod } from "./core.ts";
 import { type ConnectChannel } from "./socket.ts";
 import {
   assert,
@@ -12,12 +11,12 @@ import {
 import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import {
   ControlExecArgs,
-  controlResources,
   executeControl,
   saveControlExecution,
 } from "./control.ts";
 import { type Message } from "./socket.ts";
-import { SpriteArgsSchema, type SpriteContext } from "./sprite.ts";
+import { type SpriteContext } from "./sprite.ts";
+import { model } from "../sprite.ts";
 import { binaryFrame, FakeChannel, textFrame } from "./test_support.ts";
 import { TERMINAL_PROGRAM, TERMINAL_PYTHON } from "./exec.ts";
 
@@ -27,7 +26,7 @@ function setup(
   signal: AbortSignal = new AbortController().signal,
   overrides: Partial<SpriteContext["globalArgs"]> = {},
 ) {
-  const globalArgs = SpriteArgsSchema.parse({
+  const globalArgs = model.globalArguments.parse({
     token: "test-token",
     name: "worker name",
     ...overrides,
@@ -136,13 +135,13 @@ Deno.test("control exec reuses one socket and stores aggregate streams with per-
   }]);
   assertEquals(test.closed(), 1);
 
-  const saved = await method(
+  const saved = await runMethod(
+    test.ctx,
     "Save execution",
-    z.object({}),
     "controlExec",
-    controlResources.controlExec.schema,
+    model.resources.controlExec.schema,
     () => saveControlExecution(test.ctx, result),
-  ).execute({}, test.ctx);
+  );
   assertEquals(saved.dataHandles.map((handle) => handle.name), [
     "controlExecStdout",
     "controlExecStderr",

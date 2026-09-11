@@ -17,10 +17,10 @@ import {
   emptyRequest,
   InvalidResponseError,
   jsonRequest,
-  method,
   ndjson,
   responseBytes,
   ResponseLimitError,
+  runMethod,
   segment,
   withHandles,
 } from "./core.ts";
@@ -219,21 +219,17 @@ Deno.test("method preserves validated input and orders extra handles before opti
   });
   const output = z.object({ value: z.number(), handles: z.array(z.string()) });
   const extra = { name: "stdout" };
-  const operation = method(
+  const input = args.parse({ value: "hello" });
+  const result = await runMethod(
+    context,
     "Save",
-    args,
     "state",
     output,
-    (input) =>
-      Promise.resolve(
-        withHandles({ value: input.value, handles: ["resource field"] }, [
-          extra,
-        ]),
-      ),
-  );
-  const result = await operation.execute(
-    args.parse({ value: "hello" }),
-    context,
+    () =>
+      Promise.resolve(withHandles(
+        { value: input.value, handles: ["resource field"] },
+        [extra],
+      )),
   );
   assertEquals(result.dataHandles.map((handle) => handle.name), [
     "stdout",
@@ -244,38 +240,29 @@ Deno.test("method preserves validated input and orders extra handles before opti
     handles: ["resource field"],
   });
 
-  const plain = method(
+  const plain = await runMethod(
+    context,
     "Plain",
-    args,
     "plain",
     output,
-    (input) =>
-      Promise.resolve({ value: input.value, handles: ["ordinary data"] }),
+    () => Promise.resolve({ value: 5, handles: ["ordinary data"] }),
+  );
+  assertEquals(plain.dataHandles.map((handle) => handle.name), ["plain"]);
+  assertEquals(
+    await runMethod(context, "Bodyless", null, () => Promise.resolve()),
+    {
+      dataHandles: [],
+    },
   );
   assertEquals(
-    (await plain.execute({ value: 5 }, context)).dataHandles.map((handle) =>
-      handle.name
+    await runMethod(
+      context,
+      "Artifacts",
+      null,
+      () => Promise.resolve(withHandles(undefined, [extra])),
     ),
-    ["plain"],
+    { dataHandles: [extra] },
   );
-  const bodyless = method(
-    "Bodyless",
-    args,
-    null,
-    () => Promise.resolve(),
-  );
-  assertEquals(await bodyless.execute({ value: 5 }, context), {
-    dataHandles: [],
-  });
-  const artifacts = method(
-    "Artifacts",
-    args,
-    null,
-    () => Promise.resolve(withHandles(undefined, [extra])),
-  );
-  assertEquals(await artifacts.execute({ value: 5 }, context), {
-    dataHandles: [extra],
-  });
   assertEquals(context.getWrittenResources().length, 2);
 });
 

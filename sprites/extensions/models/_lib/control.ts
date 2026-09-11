@@ -2,18 +2,15 @@
 /** Bounded sequential exec operations over a persistent control channel. @module */
 import { z } from "npm:zod@4.4.3";
 import {
-  BinaryFile,
   concatenate,
   deadline,
   decodeFrame,
   inputBytes,
-  method,
-  resource,
   withHandles,
 } from "./core.ts";
 import { ExecArgs, ExecControl } from "./exec.ts";
 import { type Channel, type ConnectChannel, openChannel } from "./socket.ts";
-import { type SpriteContext, spritePath, verifySprite } from "./sprite.ts";
+import { type SpriteContext, spritePath } from "./sprite.ts";
 import { decodeStreamFrame, envPairs, EOF_FRAME, stdinFrame } from "./exec.ts";
 import { initializeTerminal } from "./exec.ts";
 
@@ -74,7 +71,7 @@ const OperationMetadata = z.object({
   stderrOffset: z.number().int().nonnegative(),
   stderrLength: z.number().int().nonnegative(),
 });
-const ControlExecution = z.object({
+export const ControlExecution = z.object({
   stdoutBytes: z.number().int().nonnegative(),
   stderrBytes: z.number().int().nonnegative(),
   operations: z.array(OperationMetadata).min(1).max(100),
@@ -416,30 +413,3 @@ export async function saveControlExecution(
     .writeAll(result.stderr);
   return withHandles(data, [stdout, stderr]);
 }
-
-/** Seven-day exec-batch metadata; this does not claim proxy control coverage. */
-export const controlResources = {
-  controlExec: resource(
-    ControlExecution,
-    "Sequential control-channel exec result and artifact byte ranges",
-    "7d",
-  ),
-};
-/** Fixed aggregate names avoid dynamic artifact-spec violations. */
-export const controlFiles = {
-  controlExecStdout: BinaryFile,
-  controlExecStderr: BinaryFile,
-};
-/** Persistent control-channel methods limited to the exec operation. */
-export const controlMethods = {
-  controlExec: method(
-    "Run bounded sequential exec operations over one persistent WebSocket",
-    ControlExecArgs,
-    "controlExec",
-    ControlExecution,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await saveControlExecution(ctx, await executeControl(ctx, args));
-    },
-  ),
-};

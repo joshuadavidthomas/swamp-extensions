@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: MIT
 /** Sprite checkpoint creation, discovery, and restoration. @module */
 import { z } from "npm:zod@4.4.3";
-import {
-  type Context,
-  Empty,
-  jsonRequest,
-  method,
-  ndjson,
-  requireComplete,
-  resource,
-} from "./core.ts";
-import { type SpriteContext, spritePath } from "./sprite.ts";
+import { type Context, ndjson, requireComplete } from "./core.ts";
 
 export const Checkpoint = z.object({
   id: z.string(),
@@ -39,7 +30,7 @@ const CheckpointEvent = z.discriminatedUnion("type", [
 export const CheckpointEvents = z.object({
   events: z.array(CheckpointEvent),
 });
-const Checkpoints = z.object({
+export const Checkpoints = z.object({
   checkpoints: z.array(Checkpoint),
 });
 
@@ -57,24 +48,3 @@ export async function checkpointStream(
   );
   return { events: requireComplete(events, path) };
 }
-
-export const checkpointsResources = {
-  listCheckpoints: resource(Checkpoints, "Sprite checkpoints"),
-};
-
-export const checkpointsMethods = {
-  listCheckpoints: method(
-    "List Sprite checkpoints",
-    Empty,
-    "listCheckpoints",
-    Checkpoints,
-    async (_args, ctx: SpriteContext) => ({
-      checkpoints: await jsonRequest(
-        ctx,
-        "GET",
-        spritePath(ctx.globalArgs.name, "/checkpoints"),
-        z.array(Checkpoint),
-      ),
-    }),
-  ),
-};

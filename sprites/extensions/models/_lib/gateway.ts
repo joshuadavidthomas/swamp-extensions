@@ -6,18 +6,8 @@ import type { IncomingMessage } from "node:http";
 import { Duplex } from "node:stream";
 import * as tls from "node:tls";
 import { z } from "npm:zod@4.4.3";
-import {
-  BinaryFile,
-  concatenate,
-  deadline,
-  Input,
-  inputBytes,
-  method,
-  resource,
-  segment,
-  withHandles,
-} from "./core.ts";
-import { type SpriteContext, verifySprite } from "./sprite.ts";
+import { concatenate, deadline, Input, inputBytes, segment } from "./core.ts";
+import { type SpriteContext } from "./sprite.ts";
 import { connectExecProxy } from "./proxy.ts";
 
 const GATEWAY_HOST = "api.sprites.dev";
@@ -35,7 +25,7 @@ const GatewayConnection = z.looseObject({
 }).describe(
   "Source-defined configured gateway entry. Known fields are typed and unpublished provider metadata is retained.",
 );
-const GatewayList = z.object({
+export const GatewayList = z.object({
   connections: z.array(GatewayConnection),
   available: z.array(
     z.looseObject({
@@ -46,11 +36,11 @@ const GatewayList = z.object({
   ),
 });
 
-const ProviderMethod = z.string().regex(HTTP_NAME_PATTERN).refine(
+export const ProviderMethod = z.string().regex(HTTP_NAME_PATTERN).refine(
   (value) => value.toUpperCase() !== "CONNECT",
   "CONNECT establishes a tunnel; use proxy instead of the HTTP relay.",
 );
-function validProviderPath(value: string): boolean {
+export function validProviderPath(value: string): boolean {
   if (
     !value.startsWith("/") || value.startsWith("//") || /[\\\r\n#]/.test(value)
   ) return false;
@@ -66,20 +56,15 @@ function validProviderPath(value: string): boolean {
   }
 }
 
-const GatewayRequestArgs = z.object({
-  provider: z.string().min(1),
-  connection_id: z.string().min(1),
-  providerPath: z.string().min(1).refine(
-    validProviderPath,
-    "providerPath must be an absolute provider path without a host, traversal, fragment, or header sequence.",
-  ),
-  method: ProviderMethod,
-  headers: z.record(z.string(), z.string()).meta({ sensitive: true }).default(
-    {},
-  ),
-  input: Input.optional().meta({ sensitive: true }),
-});
-const GatewayResponse = z.object({
+export type GatewayRequest = {
+  provider: string;
+  connection_id: string;
+  providerPath: string;
+  method: z.output<typeof ProviderMethod>;
+  headers: Record<string, string>;
+  input?: z.output<typeof Input>;
+};
+export const GatewayResponse = z.object({
   status: z.number().int().min(100).max(599),
   statusText: z.string(),
   headers: z.record(z.string(), z.array(z.string())).meta({ sensitive: true }),
@@ -324,7 +309,7 @@ export async function discoverGateway(
 /** Build and send one provider relay while keeping the destination on the fixed gateway host. */
 export async function relayGateway(
   ctx: SpriteContext,
-  args: z.output<typeof GatewayRequestArgs>,
+  args: GatewayRequest,
   requester: GatewayRequester = requestGateway,
 ): Promise<GatewayHttpResponse> {
   const body = inputBytes(args.input);
@@ -342,50 +327,3 @@ export async function relayGateway(
     body,
   });
 }
-
-/** Gateway JSON resources for composition into the single-Sprite model. */
-export const gatewayResources = {
-  gatewayList: resource(
-    GatewayList,
-    "Gateway connections and available providers with source-defined open metadata",
-  ),
-  gatewayRequest: resource(
-    GatewayResponse,
-    "Provider HTTP status and response headers",
-    "7d",
-  ),
-};
-
-/** Binary provider response body. */
-export const gatewayFiles = { gatewayRequestBody: BinaryFile };
-
-/** Connector gateway methods for composition into the single-Sprite model. */
-export const gatewayMethods = {
-  gatewayList: method(
-    "Discover connector access from inside the configured Sprite",
-    z.object({}),
-    "gatewayList",
-    GatewayList,
-    async (_args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return discoverGateway(ctx);
-    },
-  ),
-  gatewayRequest: method(
-    "Relay one provider path through a configured Sprite connector",
-    GatewayRequestArgs,
-    "gatewayRequest",
-    GatewayResponse,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      const response = await relayGateway(ctx, args);
-      ctx.signal.throwIfAborted();
-      const { body, ...metadata } = response;
-      const bodyHandle = await ctx.createFileWriter(
-        "gatewayRequestBody",
-        "gatewayRequestBody",
-      ).writeAll(body);
-      return withHandles(metadata, [bodyHandle]);
-    },
-  ),
-};

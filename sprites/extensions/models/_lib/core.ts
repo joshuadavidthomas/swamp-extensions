@@ -2,7 +2,6 @@
 /** Shared HTTP, output, and method boundaries for the Sprites API. @module */
 import { z } from "npm:zod@4.4.3";
 
-export const Empty = z.object({});
 export const Environment = z.record(z.string(), z.string()).meta({
   sensitive: true,
 });
@@ -248,21 +247,6 @@ export async function emptyRequest(
   const response = await request(ctx, method, path, options);
   await response.body?.cancel();
 }
-/** Typed specification for persisted JSON data. */
-export function resource<S extends z.ZodType>(
-  schema: S,
-  description: string,
-  lifetime = "infinite",
-) {
-  return { schema, description, lifetime, garbageCollection: 10 };
-}
-/** Binary artifact specification. Artifacts may contain user data and secrets. */
-export const BinaryFile = {
-  description: "Operation bytes; may contain application secrets",
-  contentType: "application/octet-stream",
-  lifetime: "7d",
-  garbageCollection: 10,
-};
 const extraHandles = Symbol("extraHandles");
 
 type WithHandles<T> = {
@@ -275,88 +259,45 @@ export function withHandles<T>(data: T, handles: Handle[]): WithHandles<T> {
   return { [extraHandles]: true, data, handles };
 }
 
-/** Wrap a validated operation with logging, optional resource output, and artifact handles. */
-export function method<
-  A extends z.ZodType,
-  O extends z.ZodObject,
-  G extends Auth = Auth,
->(
-  description: string,
-  args: A,
+/** Run one model method with shared logging, output validation, and handle ordering. */
+export async function runMethod<O extends z.ZodObject>(
+  ctx: Context,
+  operationName: string,
   spec: string,
   output: O,
-  run: (
-    args: z.output<A>,
-    ctx: Context<G>,
-  ) => Promise<z.input<O> | WithHandles<z.input<O>>>,
-): {
-  description: string;
-  arguments: A;
-  execute(input: z.output<A>, ctx: Context<G>): Promise<Result>;
-};
-export function method<A extends z.ZodType, G extends Auth = Auth>(
-  description: string,
-  args: A,
+  operation: () => Promise<z.input<O> | WithHandles<z.input<O>>>,
+): Promise<Result>;
+export async function runMethod(
+  ctx: Context,
+  operationName: string,
   output: null,
-  run: (
-    args: z.output<A>,
-    ctx: Context<G>,
-  ) => Promise<void | WithHandles<void>>,
-): {
-  description: string;
-  arguments: A;
-  execute(input: z.output<A>, ctx: Context<G>): Promise<Result>;
-};
-export function method<
-  A extends z.ZodType,
-  O extends z.ZodObject,
-  G extends Auth = Auth,
->(
-  description: string,
-  args: A,
+  operation: () => Promise<void | WithHandles<void>>,
+): Promise<Result>;
+export async function runMethod<O extends z.ZodObject>(
+  ctx: Context,
+  operationName: string,
   ...definition:
-    | [
-      output: null,
-      run: (
-        args: z.output<A>,
-        ctx: Context<G>,
-      ) => Promise<void | WithHandles<void>>,
-    ]
+    | [output: null, operation: () => Promise<void | WithHandles<void>>]
     | [
       spec: string,
       output: O,
-      run: (
-        args: z.output<A>,
-        ctx: Context<G>,
-      ) => Promise<z.input<O> | WithHandles<z.input<O>>>,
+      operation: () => Promise<z.input<O> | WithHandles<z.input<O>>>,
     ]
-) {
-  const run = definition.length === 2 ? definition[1] : definition[2];
-  return {
-    description,
-    arguments: args,
-    execute: async (input: z.output<A>, ctx: Context<G>): Promise<Result> => {
-      ctx.logger.info("Starting {operation}", { operation: description });
-      const result = await run(input, ctx);
-      const wrapped = typeof result === "object" && result !== null &&
-        extraHandles in result;
-      const data = wrapped ? result.data : result;
-      const dataHandles = wrapped ? [...result.handles] : [];
-      ctx.signal.throwIfAborted();
-      if (definition.length === 3) {
-        const [spec, output] = definition;
-        dataHandles.push(
-          await ctx.writeResource(
-            spec,
-            spec,
-            output.parse(data),
-          ),
-        );
-      }
-      ctx.logger.info("Finished {operation}", { operation: description });
-      return { dataHandles };
-    },
-  };
+): Promise<Result> {
+  const operation = definition.length === 2 ? definition[1] : definition[2];
+  ctx.logger.info("Starting {operation}", { operation: operationName });
+  const result = await operation();
+  const wrapped = typeof result === "object" && result !== null &&
+    extraHandles in result;
+  const data = wrapped ? result.data : result;
+  const dataHandles = wrapped ? [...result.handles] : [];
+  ctx.signal.throwIfAborted();
+  if (definition.length === 3) {
+    const [spec, output] = definition;
+    dataHandles.push(await ctx.writeResource(spec, spec, output.parse(data)));
+  }
+  ctx.logger.info("Finished {operation}", { operation: operationName });
+  return { dataHandles };
 }
 
 /** One deadline for an operation: the method signal joined with timeoutMs. */

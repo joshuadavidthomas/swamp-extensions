@@ -7,6 +7,7 @@ import {
 } from "jsr:@std/assert@1.0.14";
 import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import { testContext } from "./_lib/test_support.ts";
+import { AccessPolicySchema } from "./_lib/connectors.ts";
 import { model } from "./connector.ts";
 
 const globalArgs = {
@@ -54,6 +55,38 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
   });
 }
+
+Deno.test("access-policy method fields retain the published object description", () => {
+  for (const name of ["createApiKey", "callback", "updatePolicy"] as const) {
+    const field = model.methods[name].arguments.shape.access_policy;
+    const schema = "unwrap" in field ? field.unwrap() : field;
+    assertEquals(schema.description, AccessPolicySchema.description, name);
+  }
+});
+
+Deno.test("method logs use the public description for start and finish", async () => {
+  const context = testContext({ ...globalArgs, provider: "openrouter" });
+  const logs: Array<[string, ...unknown[]]> = [];
+  context.logger.info = (message, ...properties) => {
+    logs.push([message, ...properties]);
+  };
+  await withMockedFetch(
+    [jsonResponse({
+      connection: connection({
+        provider: "openrouter",
+        connection_type: "provisioned",
+        scopes: null,
+        user_id: null,
+      }),
+    }, 201)],
+    () => model.methods.provision.execute({}, context),
+  );
+  const operation = model.methods.provision.description;
+  assertEquals(logs, [
+    ["Starting {operation}", { operation }],
+    ["Finished {operation}", { operation }],
+  ]);
+});
 
 Deno.test("createApiKey sends snake_case credential and policy fields once", async () => {
   const context = testContext({ ...globalArgs, provider: "custom_api" });

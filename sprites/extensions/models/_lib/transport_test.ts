@@ -15,7 +15,8 @@ import WebSocket, { WebSocketServer } from "npm:ws@8.21.3";
 import { executeHttp } from "./exec.ts";
 import { requestGateway } from "./gateway.ts";
 import { openChannel, type SocketFactory } from "./socket.ts";
-import { SpriteArgsSchema, type SpriteContext } from "./sprite.ts";
+import { type SpriteContext } from "./sprite.ts";
+import { model } from "../sprite.ts";
 import { connectExecProxy, ProxyArgs, runProxy } from "./proxy.ts";
 import { testContext } from "./test_support.ts";
 
@@ -138,7 +139,7 @@ function context(
   signal = new AbortController().signal,
 ): SpriteContext {
   return testContext(
-    SpriteArgsSchema.parse({
+    model.globalArguments.parse({
       token: "placeholder",
       baseUrl: `https://127.0.0.1:${port}`,
       timeoutMs: 5_000,

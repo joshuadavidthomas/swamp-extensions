@@ -7,7 +7,8 @@ import {
 } from "jsr:@std/assert@1.0.14";
 import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import { testContext } from "./_lib/test_support.ts";
-import { createMethods, model } from "./organization.ts";
+import { model } from "./organization.ts";
+import { type ManagementExec } from "./_lib/local-api.ts";
 
 const globalArgs = {
   token: "test-token",
@@ -1487,7 +1488,7 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
       return await createFileWriter(spec, name).writeAll(bytes);
     },
   });
-  const methods = createMethods((ctx, name, query, input) => {
+  const execute: ManagementExec = (ctx, name, query, input) => {
     assertEquals(ctx, context);
     assertEquals(ctx.globalArgs.timeoutMs, 90_000);
     assertEquals(context.getWrittenResources().length, order.length);
@@ -1508,7 +1509,8 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
       stderr: new Uint8Array([10]),
       exitCode: name === "worker-2" ? 1 : 0,
     });
-  });
+  };
+  Object.assign(context, { managementExec: execute });
   const { result } = await withMockedFetch(
     [
       response({
@@ -1517,14 +1519,17 @@ Deno.test("exec records nonzero exits, continues after transport failure, and sa
       }),
     ],
     () =>
-      methods.exec.execute({
-        select: { all: true },
-        cmd: ["cat"],
-        path: "/bin/cat",
-        dir: "/tmp",
-        env: { MODE: "test" },
-        input: { kind: "text", text: "hello" },
-      }, context),
+      model.methods.exec.execute(
+        {
+          select: { all: true },
+          cmd: ["cat"],
+          path: "/bin/cat",
+          dir: "/tmp",
+          env: { MODE: "test" },
+          input: { kind: "text", text: "hello" },
+        },
+        context,
+      ),
   );
   assertEquals(order, ["worker-1", "worker-2", "worker-3"]);
   const writes = context.getWrittenResources();

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 /** Organization connector schemas and collection read; credentials are excluded. @module */
 import { z } from "npm:zod@4.4.3";
-import { jsonRequest, method, resource } from "./core.ts";
 
 export const AccessPolicySchema = z.object({
   allow_all: z.boolean().optional().describe(
@@ -63,26 +62,3 @@ export const ConnectionResponseSchema = z.object({
 export const ConnectionsResponseSchema = z.object({
   connections: z.array(ConnectionSchema),
 });
-
-export const connectorsResources = {
-  listConnectors: resource(
-    ConnectionsResponseSchema,
-    "Complete organization connector collection",
-  ),
-};
-export const connectorsMethods = {
-  listConnectors: method(
-    "List organization connectors",
-    z.object({ provider: z.string().optional() }),
-    "listConnectors",
-    ConnectionsResponseSchema,
-    (args, ctx) =>
-      jsonRequest(
-        ctx,
-        "GET",
-        "/v1/oauth/connections",
-        ConnectionsResponseSchema,
-        { query: { provider: args.provider } },
-      ),
-  ),
-};

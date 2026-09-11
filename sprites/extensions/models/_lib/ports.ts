@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 /** Bounded listening-port snapshots and notifications. @module */
 import { z } from "npm:zod@4.4.3";
-import { decodeFrame, method, resource } from "./core.ts";
+import { decodeFrame } from "./core.ts";
 import { type ConnectChannel, observeChannel, openChannel } from "./socket.ts";
 import { type SpriteContext } from "./sprite.ts";
 
@@ -19,7 +19,7 @@ const PortList = z.object({
     "Current listening ports. The native Go endpoint may encode an empty slice as null.",
   ),
 });
-const PortWatchOutput = z.object({
+export const PortWatchOutput = z.object({
   initialPorts: z.array(PortNotification).max(MAX_PORTS).describe(
     "Initial listening-port snapshot; a native null snapshot is normalized to an empty array.",
   ),
@@ -60,21 +60,3 @@ export async function watchPorts(
     truncated: true,
   };
 }
-
-export const portsResources = {
-  watchPorts: resource(
-    PortWatchOutput,
-    "Initial listening-port snapshot and bounded incremental notifications",
-    "7d",
-  ),
-};
-
-export const portsMethods = {
-  watchPorts: method(
-    "Observe a Sprite listening-port snapshot and bounded open/close notifications",
-    PortWatchArgs,
-    "watchPorts",
-    PortWatchOutput,
-    (args, ctx: SpriteContext) => watchPorts(ctx, args),
-  ),
-};

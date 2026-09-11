@@ -6,19 +6,10 @@ import {
 import { type Auth, type Context } from "./core.ts";
 import { type Channel, type Message } from "./socket.ts";
 import { assertEquals } from "jsr:@std/assert@1.0.14";
-import { type SpriteContext, spriteMethods } from "./sprite.ts";
-import { checkpointsMethods } from "./checkpoints.ts";
-import { policyMethods } from "./policy.ts";
-import { servicesMethods } from "./services.ts";
-import { fsMethods } from "./fs.ts";
+import { type SpriteContext } from "./sprite.ts";
+import { model as spriteModel } from "../sprite.ts";
 
-const routeMethods = {
-  ...spriteMethods,
-  ...checkpointsMethods,
-  ...policyMethods,
-  ...servicesMethods,
-  ...fsMethods,
-};
+const routeMethods = spriteModel.methods;
 export class FakeChannel implements Channel {
   readonly sent: Array<string | Uint8Array> = [];
   closed = false;

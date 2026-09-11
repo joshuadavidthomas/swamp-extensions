@@ -10,14 +10,7 @@ import * as net from "node:net";
 import { Buffer } from "node:buffer";
 import { Duplex } from "node:stream";
 import { z } from "npm:zod@4.4.3";
-import {
-  concatenate,
-  deadline,
-  decodeFrame,
-  method,
-  type Query,
-  resource,
-} from "./core.ts";
+import { concatenate, deadline, decodeFrame, type Query } from "./core.ts";
 import {
   type Channel,
   type ConnectChannel,
@@ -319,7 +312,7 @@ export const ProxyArgs = z.object({
   durationMs: z.number().int().positive().max(2_147_483_647),
   maxConnections: z.number().int().positive().max(1_024).default(32),
 });
-const ProxyOutput = z.object({
+export const ProxyOutput = z.object({
   localAddress: z.literal("127.0.0.1"),
   localPort: Port,
   remoteHost: z.string(),
@@ -672,16 +665,3 @@ export async function runProxy(
     closed: true,
   };
 }
-
-export const proxyResources = {
-  proxy: resource(ProxyOutput, "Closed loopback TCP proxy observation", "7d"),
-};
-export const proxyMethods = {
-  proxy: method(
-    "Run a bounded loopback-only TCP proxy through the Sprite",
-    ProxyArgs,
-    "proxy",
-    ProxyOutput,
-    (args, ctx: SpriteContext) => runProxy(ctx, args),
-  ),
-};

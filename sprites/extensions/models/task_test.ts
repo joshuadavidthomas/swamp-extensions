@@ -2,9 +2,19 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.14";
 import { withMockedFetch } from "jsr:@swamp-club/swamp-testing@0.20260706.24";
 import { type ManagementExec } from "./_lib/local-api.ts";
-import { createMethods } from "./task.ts";
+import { model } from "./task.ts";
 import { TaskExpiry } from "./_lib/tasks.ts";
 import { testContext } from "./_lib/test_support.ts";
+
+function runnable(name: keyof typeof model.methods) {
+  return model.methods[name] as unknown as {
+    arguments: { parse(value: unknown): unknown };
+    execute(
+      args: unknown,
+      ctx: ReturnType<typeof setup>,
+    ): Promise<{ dataHandles: unknown[] }>;
+  };
+}
 
 const globalArgs = {
   token: "test-token",
@@ -39,11 +49,14 @@ const result = (
   exitCode,
 });
 function setup(stored = true) {
-  return testContext(globalArgs, {
-    storedResources: stored
-      ? { state: { ...task, sprite: { name: sprite.name, id: sprite.id } } }
-      : {},
-  });
+  return Object.assign(
+    testContext(globalArgs, {
+      storedResources: stored
+        ? { state: { ...task, sprite: { name: sprite.name, id: sprite.id } } }
+        : {},
+    }),
+    { managementExec: undefined as ManagementExec | undefined },
+  );
 }
 const identity = () => new Response(JSON.stringify(sprite));
 
@@ -132,10 +145,10 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       assertEquals(query.stdin, "body" in c);
       return Promise.resolve(result(c.response, c.status));
     };
-    const methods = createMethods(execute);
+    test.managementExec = execute;
     const { calls } = await withMockedFetch(
       [identity()],
-      () => methods[c.method].execute(c.input as never, test),
+      () => runnable(c.method).execute(c.input, test),
     );
     assertEquals(calls.length, 1);
     assertEquals(
@@ -177,15 +190,15 @@ Deno.test("management failures are sanitized and never replay a mutation", async
   ) {
     const test = setup();
     let count = 0;
-    const methods = createMethods(() => {
+    test.managementExec = () => {
       count++;
       return Promise.resolve(response);
-    });
+    };
     const error = await assertRejects(
       () =>
         withMockedFetch(
           [identity()],
-          () => methods.create.execute({ expire: 60 }, test),
+          () => model.methods.create.execute({ expire: 60 }, test),
         ),
       Error,
     );
@@ -222,7 +235,7 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
     const controller = new AbortController();
     test.signal = controller.signal;
     test.globalArgs = { ...globalArgs, timeoutMs: 30 };
-    const methods = createMethods(() => {
+    test.managementExec = () => {
       if (cancel) controller.abort();
       else {
         const deadline = performance.now() + 40;
@@ -231,12 +244,12 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
         ) { /* Queue starvation: timer cannot fire. */ }
       }
       return Promise.resolve(result("", 201));
-    });
+    };
     await assertRejects(
       () =>
         withMockedFetch(
           [identity()],
-          () => methods.create.execute({ expire: 1 }, test),
+          () => model.methods.create.execute({ expire: 1 }, test),
         ),
       Error,
     );
@@ -248,17 +261,17 @@ Deno.test("task refuses unbound or replaced Sprite before local exec", async () 
   for (const stored of [false, true]) {
     const test = setup(stored);
     let count = 0;
-    const methods = createMethods(() => {
+    test.managementExec = () => {
       count++;
       return Promise.resolve(result());
-    });
+    };
     const { calls } = await withMockedFetch(
       stored
         ? [new Response(JSON.stringify({ ...sprite, id: "replacement" }))]
         : [],
       () =>
         assertRejects(
-          () => methods.refresh.execute({ expire: 60 }, test),
+          () => model.methods.refresh.execute({ expire: 60 }, test),
           Error,
           stored ? "replaced" : "No Sprite identity is saved",
         ),
@@ -271,19 +284,19 @@ Deno.test("task refuses unbound or replaced Sprite before local exec", async () 
 Deno.test("task create and get bind and save their Sprite identity", async () => {
   for (const method of ["create", "get"] as const) {
     const test = setup(false);
-    const methods = createMethods((_ctx, name, query) => {
+    test.managementExec = (_ctx, name, query) => {
       assertEquals(name, globalArgs.sprite);
       return Promise.resolve(
         (query.cmd as string[]).includes("POST")
           ? result("", 201)
           : result(JSON.stringify(task), 200),
       );
-    });
+    };
     await withMockedFetch(
       [identity()],
       () =>
-        methods[method].execute(
-          methods[method].arguments.parse({ expire: 60 }) as never,
+        runnable(method).execute(
+          runnable(method).arguments.parse({ expire: 60 }),
           test,
         ),
     );
@@ -303,14 +316,14 @@ Deno.test("task get rejects invalid shapes, HTTP errors, and malformed JSON", as
   ) {
     const test = setup();
     let count = 0;
-    const methods = createMethods((_ctx, _name, query) => {
+    test.managementExec = (_ctx, _name, query) => {
       count++;
       assertEquals(query.stdin, false);
       return Promise.resolve(response);
-    });
+    };
     await withMockedFetch(
       [identity()],
-      () => assertRejects(() => methods.get.execute({}, test), Error),
+      () => assertRejects(() => model.methods.get.execute({}, test), Error),
     );
     assertEquals(count, 1);
     assertEquals(test.getWrittenResources(), []);

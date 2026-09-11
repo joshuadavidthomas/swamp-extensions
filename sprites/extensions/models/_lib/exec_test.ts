@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { concatenate, method } from "./core.ts";
-import { z } from "npm:zod@4.4.3";
+import { concatenate, runMethod } from "./core.ts";
 import {
   assert,
   assertEquals,
@@ -15,7 +14,6 @@ import {
   envPairs,
   EOF_FRAME,
   ExecArgs,
-  execResources,
   executeSocket,
   initializeTerminal,
   saveExecution,
@@ -24,12 +22,13 @@ import {
   TERMINAL_PYTHON,
 } from "./exec.ts";
 import { type ConnectChannel, type Message } from "./socket.ts";
-import { SpriteArgsSchema, type SpriteContext } from "./sprite.ts";
+import { type SpriteContext } from "./sprite.ts";
+import { model } from "../sprite.ts";
 import { binaryFrame, FakeChannel, textFrame } from "./test_support.ts";
 
 const encoder = new TextEncoder();
 function setup(messages: Message[]) {
-  const globalArgs = SpriteArgsSchema.parse({
+  const globalArgs = model.globalArguments.parse({
     token: "test-token",
     name: "worker",
   });
@@ -82,13 +81,13 @@ Deno.test("WebSocket exec preserves binary streams, repeated argv/env, stdin EOF
   assertEquals(result.exitCode, 0);
   assertEquals(result.sessionId, "7");
   assert(test.closed());
-  const saved = await method(
+  const saved = await runMethod(
+    test.ctx,
     "Save execution",
-    z.object({}),
     "exec",
-    execResources.exec.schema,
+    model.resources.exec.schema,
     () => saveExecution(test.ctx, result, true, "exec"),
-  ).execute({}, test.ctx);
+  );
   assertEquals(saved.dataHandles.map((handle) => handle.name), [
     "execStdout",
     "execStderr",
@@ -232,13 +231,13 @@ Deno.test("attachment takes TTY mode from session_info and handles JSON exit", a
     "code 9",
   );
   assertEquals(test.getWrittenFiles(), []);
-  await method(
+  await runMethod(
+    test.ctx,
     "Save execution",
-    z.object({}),
     "attach",
-    execResources.attach.schema,
+    model.resources.attach.schema,
     () => saveExecution(test.ctx, result, false, "attach"),
-  ).execute({}, test.ctx);
+  );
   assertEquals(test.getWrittenResources()[0].data.exitCode, 9);
 });
 Deno.test("exec refuses disconnect without exit, bad frames, wrong session, and response overrun", async () => {

@@ -9,14 +9,13 @@ import { PassThrough, Readable } from "node:stream";
 import type * as https from "node:https";
 import type * as tls from "node:tls";
 import { testContext } from "./test_support.ts";
+import { model } from "../sprite.ts";
 import {
   discoverGateway,
   type GatewayHttpResponse,
-  gatewayMethods,
   relayGateway,
   requestGateway,
 } from "./gateway.ts";
-
 const globalArgs = {
   token: "outer-secret",
   baseUrl: "https://api.sprites.dev",
@@ -41,7 +40,7 @@ function response(
 Deno.test("gateway supports extension methods", async () => {
   await relayGateway(
     ctx,
-    gatewayMethods.gatewayRequest.arguments.parse({
+    model.methods.gatewayRequest.arguments.parse({
       provider: "custom_api",
       connection_id: "c1",
       providerPath: "/items",
@@ -84,7 +83,7 @@ Deno.test("provider relay fixes the destination, encodes identity, preserves byt
   const providerBody = new Uint8Array([0, 255, 3]);
   const result = await relayGateway(
     ctx,
-    gatewayMethods.gatewayRequest.arguments.parse({
+    model.methods.gatewayRequest.arguments.parse({
       provider: "custom/api",
       connection_id: "id one",
       providerPath: "/v2/items?q=a",
@@ -138,7 +137,7 @@ Deno.test("relay rejects credential, routing, and Fly identity headers before tr
       async () =>
         await relayGateway(
           ctx,
-          gatewayMethods.gatewayRequest.arguments.parse({
+          model.methods.gatewayRequest.arguments.parse({
             provider: "slack",
             connection_id: "c1",
             providerPath: "/chat.postMessage",
@@ -166,7 +165,7 @@ Deno.test("relay rejects credential, routing, and Fly identity headers before tr
       async () =>
         await relayGateway(
           ctx,
-          gatewayMethods.gatewayRequest.arguments.parse({
+          model.methods.gatewayRequest.arguments.parse({
             provider: "slack",
             connection_id: "c1",
             providerPath,

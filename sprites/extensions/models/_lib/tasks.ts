@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: MIT
-/** Sprite task collection, read through the local management socket. @module */
+/** Sprite task protocol schemas and collection read. @module */
 import { z } from "npm:zod@4.4.3";
-import { Empty, method, resource } from "./core.ts";
 import { executeHttp } from "./exec.ts";
 import { type ManagementExec, read } from "./local-api.ts";
 import { type SpriteContext, verifySprite } from "./sprite.ts";
 
-export const ManagementResourceName = z.string().min(1).max(256).refine(
-  (name) => name !== "." && name !== "..",
-  "A management resource name must not be a dot segment.",
-);
 const units: Record<string, number> = {
   ns: 1e-9,
   us: 1e-6,
@@ -19,7 +14,6 @@ const units: Record<string, number> = {
   m: 60,
   h: 3600,
 };
-/** Tasks accept seconds or Go-style durations, bounded to the provider's one-hour limit. */
 export const TaskExpiry = z.union([
   z.number().int().positive().max(3600),
   z.string().min(1).max(128).refine((text) => {
@@ -39,27 +33,11 @@ export const Task = z.object({
 });
 export const Tasks = z.object({ tasks: z.array(Task) });
 
-/** Collection methods with an explicit local exec boundary. */
-export function createMethods(execute: ManagementExec = executeHttp) {
-  return {
-    listTasks: method(
-      "List active task holds through the Sprite management socket",
-      Empty,
-      "listTasks",
-      Tasks,
-      async (_args, ctx: SpriteContext) => {
-        // Even local reads start a process. Require the saved identity for every exec.
-        await verifySprite(ctx);
-        return read(ctx, ctx.globalArgs.name, "/v1/tasks", Tasks, execute);
-      },
-    ),
-  };
+/** Read active task holds through an injectable local management transport. */
+export async function listTasks(
+  ctx: SpriteContext,
+  execute: ManagementExec = executeHttp,
+): Promise<z.output<typeof Tasks>> {
+  await verifySprite(ctx);
+  return read(ctx, ctx.globalArgs.name, "/v1/tasks", Tasks, execute);
 }
-export const tasksResources = {
-  listTasks: resource(
-    Tasks,
-    "Observed task holds; this snapshot does not keep a Sprite awake",
-    "7d",
-  ),
-};
-export const tasksMethods = createMethods();
