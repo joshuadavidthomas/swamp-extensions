@@ -562,11 +562,15 @@ Deno.test("restart propagates failure without retrying", async () => {
 });
 
 Deno.test("restart refuses missing and replaced identities before POST", async () => {
-  const identities: Record<string, Record<string, unknown>>[] = [{}, {
-    state: { ...sprite, id: "old-id" },
-  }];
-  for (const storedResources of identities) {
-    const test = createModelTestContext({ globalArgs, storedResources });
+  const identities: (typeof sprite | undefined)[] = [
+    undefined,
+    { ...sprite, id: "old-id" },
+  ];
+  for (const stored of identities) {
+    const test = createModelTestContext({
+      globalArgs,
+      storedResources: stored ? { state: stored } : {},
+    });
     const { calls } = await withMockedFetch(
       [json(sprite)],
       () =>
@@ -628,13 +632,14 @@ Deno.test("probeUrl refuses missing and replaced identities before the URL reque
     name: "worker",
     url: "https://worker-a.sprites.app/",
   };
-  const identities: Record<string, Record<string, unknown>>[] = [{}, {
-    state: { ...state, id: "old-id" },
-  }];
-  for (const storedResources of identities) {
+  const identities: (typeof state | undefined)[] = [
+    undefined,
+    { ...state, id: "old-id" },
+  ];
+  for (const stored of identities) {
     const test = createModelTestContext({
       globalArgs: probeGlobals,
-      storedResources,
+      storedResources: stored ? { state: stored } : {},
     });
     const { calls } = await withMockedFetch(
       [json(state)],

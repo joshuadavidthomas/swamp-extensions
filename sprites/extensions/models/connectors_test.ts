@@ -35,26 +35,28 @@ function createModelTestContext(
   };
 }
 
-function connection(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "connection-1",
-    provider: "slack",
-    provider_account_id: "team-1",
-    provider_account_name: "Acme",
-    scopes: "chat:write,channels:read",
-    connection_type: "oauth",
-    access_policy: policy,
-    provider_info: {
-      icon: "speech-bubble",
-      nested: { color: "aubergine", flags: [true, null, 3] },
-    },
-    user_id: "user-1",
-    token_expires_at: "2026-09-10T12:00:00Z",
-    inserted_at: "2026-09-09T10:00:00Z",
-    updated_at: "2026-09-09T11:00:00Z",
-    usage_snippet: "fetch('/v1/gateway/slack/connection-1/...')",
-    ...overrides,
-  };
+const connectionBase = {
+  id: "connection-1",
+  provider: "slack",
+  provider_account_id: "team-1",
+  provider_account_name: "Acme",
+  scopes: "chat:write,channels:read" as string | null,
+  connection_type: "oauth",
+  access_policy: policy,
+  provider_info: {
+    icon: "speech-bubble",
+    nested: { color: "aubergine", flags: [true, null, 3] },
+  },
+  user_id: "user-1" as string | null,
+  token_expires_at: "2026-09-10T12:00:00Z",
+  inserted_at: "2026-09-09T10:00:00Z",
+  updated_at: "2026-09-09T11:00:00Z",
+  usage_snippet: "fetch('/v1/gateway/slack/connection-1/...')",
+};
+type Connection = typeof connectionBase;
+
+function connection(overrides: Partial<Connection> = {}) {
+  return { ...connectionBase, ...overrides };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

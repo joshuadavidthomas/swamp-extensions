@@ -112,10 +112,6 @@ function normalizeSprite(sprite: ApiSprite): NormalizedSprite {
   };
 }
 
-function messageFrom(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function retryDelayMs(response: Response, attempt: number): number {
   const retryAfter = response.headers.get("retry-after");
   if (retryAfter) {
@@ -201,7 +197,7 @@ async function listSpritesPage(
         signal.aborted || error instanceof ResponseLimitError ||
         attempt === maxAttempts
       ) {
-        throw new Error(`Sprites API request failed: ${messageFrom(error)}`, {
+        throw new Error("Sprites API request failed", {
           cause: error,
         });
       }
@@ -318,9 +314,7 @@ export const model = {
           } while (continuationToken);
         } catch (error) {
           throw new Error(
-            `Could not read Sprites organization inventory: ${
-              messageFrom(error)
-            }`,
+            "Could not read Sprites organization inventory",
             { cause: error },
           );
         }

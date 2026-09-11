@@ -45,13 +45,13 @@ export type Handle = { name: string };
 export type Context<G extends Auth = Auth> = {
   globalArgs: G;
   signal: AbortSignal;
-  logger: { info(message: string, properties?: Record<string, unknown>): void };
+  logger: { info(message: string, ...args: unknown[]): void };
   writeResource(
     spec: string,
     name: string,
-    data: Record<string, unknown>,
+    data: object,
   ): Promise<Handle>;
-  readResource(name: string): Promise<Record<string, unknown> | null>;
+  readResource(name: string): Promise<unknown>;
   deleteResource(name: string): Promise<void>;
   createFileWriter(
     spec: string,

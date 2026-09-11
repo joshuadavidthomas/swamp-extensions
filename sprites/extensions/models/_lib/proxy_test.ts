@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { createModelTestContext } from "@swamp-club/swamp-testing";
+import type { Query } from "./core.ts";
 import type { Channel, Message } from "./socket.ts";
 import type { SpriteContext } from "./sprite-api.ts";
 import { connectExecProxy, runProxy } from "./proxy.ts";
@@ -105,7 +106,7 @@ Deno.test("exec relay uses fixed argv, split ack, and queues raw stdout", async 
     binary(1, [7, 6]),
     binary(3, [0]),
   ]);
-  let query: Record<string, unknown> | undefined;
+  let query: Query | undefined;
   const stream = await verified(() =>
     connectExecProxy(context(), "db.internal", 5432, (_ctx, path, value) => {
       assertEquals(path, "/v1/sprites/demo%20sprite/exec");

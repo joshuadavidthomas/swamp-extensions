@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 
-import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assertEquals,
+  assertIsError,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import {
   createModelTestContext,
   withMockedFetch,
@@ -21,16 +26,19 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
-function emptyPage(overrides: Record<string, unknown> = {}): Response {
-  return response({
-    sprites: [],
-    has_more: false,
-    name: "acme",
-    running: 0,
-    warm: 0,
-    cold: 0,
-    ...overrides,
-  });
+const emptyPageBase = {
+  sprites: [],
+  has_more: false,
+  next_continuation_token: null as string | null,
+  name: "acme",
+  running: 0,
+  warm: 0,
+  cold: 0,
+};
+type EmptyPage = typeof emptyPageBase;
+
+function emptyPage(overrides: Partial<EmptyPage> = {}): Response {
+  return response({ ...emptyPageBase, ...overrides });
 }
 
 const privateAccess = "admins";
@@ -182,7 +190,7 @@ Deno.test("lookup discovers an empty organization with a null terminal cursor", 
 
 Deno.test("lookup rejects a null cursor when the API reports more pages", async () => {
   const test = createModelTestContext({ globalArgs });
-  const { calls } = await withMockedFetch(
+  const { calls, result: error } = await withMockedFetch(
     [emptyPage({ has_more: true, next_continuation_token: null })],
     () =>
       assertRejects(
@@ -193,8 +201,13 @@ Deno.test("lookup rejects a null cursor when the API reports more pages", async 
             globalArgs,
           }),
         Error,
-        "another page without a continuation token",
+        "Could not read Sprites organization inventory",
       ),
+  );
+  assertIsError(error.cause);
+  assertStringIncludes(
+    error.cause.message,
+    "another page without a continuation token",
   );
   assertEquals(calls.length, 1);
   assertEquals(test.getWrittenResources(), []);
@@ -222,7 +235,8 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
     error.message,
     "Could not read Sprites organization inventory",
   );
-  assertStringIncludes(error.message, "HTTP 401");
+  assertIsError(error.cause);
+  assertStringIncludes(error.cause.message, "HTTP 401");
   assertEquals(getWrittenResources(), []);
 });
 
@@ -244,7 +258,8 @@ Deno.test("lookup rejects an incomplete API page", async () => {
     Error,
   );
 
-  assertStringIncludes(error.message, "unexpected list response");
+  assertIsError(error.cause);
+  assertStringIncludes(error.cause.message, "unexpected list response");
   assertEquals(getWrittenResources(), []);
 });
 
@@ -275,7 +290,8 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
     Error,
   );
 
-  assertStringIncludes(error.message, "repeated a continuation token");
+  assertIsError(error.cause);
+  assertStringIncludes(error.cause.message, "repeated a continuation token");
   assertEquals(getWrittenResources(), []);
 });
 
@@ -384,7 +400,8 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
     Error,
   );
 
-  assertStringIncludes(error.message, "HTTP 503");
+  assertIsError(error.cause);
+  assertStringIncludes(error.cause.message, "HTTP 503");
   assertEquals(requests, 3);
   assertEquals(getWrittenResources(), []);
 });
@@ -419,7 +436,8 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
     Error,
   );
 
-  assertStringIncludes(error.message, "longer than timeoutMs");
+  assertIsError(error.cause);
+  assertStringIncludes(error.cause.message, "longer than timeoutMs");
   assertEquals(requests, 1);
   assertEquals(getWrittenResources(), []);
 });
@@ -452,7 +470,8 @@ Deno.test("lookup honors parent cancellation without retrying", async () => {
     Error,
   );
 
-  assertStringIncludes(error.message, "request failed");
+  assertIsError(error.cause);
+  assertStringIncludes(error.cause.message, "request failed");
   assertEquals(requests, 1);
   assertEquals(getWrittenResources(), []);
 });
@@ -484,7 +503,9 @@ Deno.test("inventory enforces one aggregate byte budget across all pages without
         deleteResource: async () => {},
         globalArgs: limited,
       })), Error);
-  assertStringIncludes(error.message, "maxResponseBytes");
+  assertIsError(error.cause);
+  assertIsError(error.cause.cause);
+  assertStringIncludes(error.cause.cause.message, "maxResponseBytes");
   assertEquals(requests, 2);
   assertEquals(test.getWrittenResources(), []);
 });

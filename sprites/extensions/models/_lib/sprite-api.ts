@@ -49,13 +49,14 @@ export async function verifySprite(
     spritePath(ctx),
     SpriteResponse,
   );
-  const stored = await ctx.readResource("state");
-  if (!stored) {
+  const value = await ctx.readResource("state");
+  if (value === null) {
     throw new Error(
       "No Sprite identity is saved. Run lookup and verify its ID before mutating it.",
     );
   }
-  if (stored.id !== current.id) {
+  const stored = z.object({ id: SpriteResponse.shape.id }).safeParse(value);
+  if (!stored.success || stored.data.id !== current.id) {
     throw new Error(
       "The Sprite was replaced since its saved state. Run lookup and verify the new ID before mutating it.",
     );
