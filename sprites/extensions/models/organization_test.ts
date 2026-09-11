@@ -32,7 +32,7 @@ function emptyPage(overrides: Partial<typeof emptyPageBase> = {}): Response {
   return response({ ...emptyPageBase, ...overrides });
 }
 
-Deno.test("lookup reads every page and preserves admins access", async () => {
+Deno.test("listSprites reads every page and preserves admins access", async () => {
   const context = testContext(globalArgs);
 
   const { result, calls } = await withMockedFetch(
@@ -83,7 +83,7 @@ Deno.test("lookup reads every page and preserves admins access", async () => {
       });
     },
     () =>
-      model.methods.lookup.execute(
+      model.methods.listSprites.execute(
         { prefix: "worker-" },
         context,
       ),
@@ -96,11 +96,11 @@ Deno.test("lookup reads every page and preserves admins access", async () => {
   assertStringIncludes(calls[1].url, "continuation_token=page-2");
   assertEquals(calls[0].method, "GET");
   assertEquals(calls[0].headers.authorization, "Bearer test-token");
-  assertEquals(result.dataHandles[0].name, "inventory");
+  assertEquals(result.dataHandles[0].name, "sprites");
 
   const writes = context.getWrittenResources();
   assertEquals(writes.length, 1);
-  assertEquals(writes[0].specName, "inventory");
+  assertEquals(writes[0].specName, "sprites");
 
   const inventory = writes[0].data;
   assertEquals(inventory.organization, {
@@ -143,11 +143,11 @@ Deno.test("lookup reads every page and preserves admins access", async () => {
   ]);
 });
 
-Deno.test("lookup discovers an empty organization with a null terminal cursor", async () => {
+Deno.test("listSprites discovers an empty organization with a null terminal cursor", async () => {
   const test = testContext(globalArgs);
   const { calls } = await withMockedFetch(
     [emptyPage()],
-    () => model.methods.lookup.execute({}, test),
+    () => model.methods.listSprites.execute({}, test),
   );
   assertEquals(calls.length, 1);
   const inventory = test.getWrittenResources()[0].data;
@@ -160,13 +160,13 @@ Deno.test("lookup discovers an empty organization with a null terminal cursor", 
   assertEquals(inventory.sprites, []);
 });
 
-Deno.test("lookup rejects a null cursor when the API reports more pages", async () => {
+Deno.test("listSprites rejects a null cursor when the API reports more pages", async () => {
   const test = testContext(globalArgs);
   const { calls } = await withMockedFetch(
     [emptyPage({ has_more: true, next_continuation_token: null })],
     () =>
       assertRejects(
-        () => model.methods.lookup.execute({}, test),
+        () => model.methods.listSprites.execute({}, test),
         Error,
         "another page without a continuation token",
       ),
@@ -175,7 +175,7 @@ Deno.test("lookup rejects a null cursor when the API reports more pages", async 
   assertEquals(test.getWrittenResources(), []);
 });
 
-Deno.test("lookup fails before writing when the API rejects the token", async () => {
+Deno.test("listSprites fails before writing when the API rejects the token", async () => {
   const context = testContext(globalArgs);
 
   const error = await assertRejects(
@@ -183,7 +183,7 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
       withMockedFetch(
         [response({ error: "unauthorized" }, 401)],
         () =>
-          model.methods.lookup.execute(
+          model.methods.listSprites.execute(
             {},
             context,
           ),
@@ -195,7 +195,7 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
   assertEquals(context.getWrittenResources(), []);
 });
 
-Deno.test("lookup rejects an incomplete API page", async () => {
+Deno.test("listSprites rejects an incomplete API page", async () => {
   const context = testContext(globalArgs);
 
   let requests = 0;
@@ -207,7 +207,7 @@ Deno.test("lookup rejects an incomplete API page", async () => {
           return response({ name: "acme" });
         },
         () =>
-          model.methods.lookup.execute(
+          model.methods.listSprites.execute(
             {},
             context,
           ),
@@ -220,7 +220,7 @@ Deno.test("lookup rejects an incomplete API page", async () => {
   assertEquals(context.getWrittenResources(), []);
 });
 
-Deno.test("lookup rejects a repeated continuation token", async () => {
+Deno.test("listSprites rejects a repeated continuation token", async () => {
   const context = testContext(globalArgs);
 
   const error = await assertRejects(
@@ -237,7 +237,7 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
           }),
         ],
         () =>
-          model.methods.lookup.execute(
+          model.methods.listSprites.execute(
             {},
             context,
           ),
@@ -249,7 +249,7 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
   assertEquals(context.getWrittenResources(), []);
 });
 
-Deno.test("lookup retries transient responses, network failures, and response-body read failures", async () => {
+Deno.test("listSprites retries transient responses, network failures, and response-body read failures", async () => {
   const failures = [
     () =>
       new Response("busy", { status: 503, headers: { "retry-after": "0" } }),
@@ -270,14 +270,14 @@ Deno.test("lookup retries transient responses, network failures, and response-bo
     let requests = 0;
     const { calls } = await withMockedFetch(
       () => ++requests === 1 ? firstFailure() : emptyPage(),
-      () => model.methods.lookup.execute({}, context),
+      () => model.methods.listSprites.execute({}, context),
     );
     assertEquals(calls.length, 2);
     assertEquals(context.getWrittenResources().length, 1);
   }
 });
 
-Deno.test("lookup stops after transient retries are exhausted", async () => {
+Deno.test("listSprites stops after transient retries are exhausted", async () => {
   const context = testContext(globalArgs);
   let requests = 0;
 
@@ -292,7 +292,7 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
           });
         },
         () =>
-          model.methods.lookup.execute(
+          model.methods.listSprites.execute(
             {},
             context,
           ),
@@ -305,7 +305,7 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
   assertEquals(context.getWrittenResources(), []);
 });
 
-Deno.test("lookup rejects a retry delay longer than its request budget", async () => {
+Deno.test("listSprites rejects a retry delay longer than its request budget", async () => {
   const context = testContext({ ...globalArgs, timeoutMs: 1_000 });
   let requests = 0;
 
@@ -320,7 +320,7 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
           });
         },
         () =>
-          model.methods.lookup.execute(
+          model.methods.listSprites.execute(
             {},
             context,
           ),
@@ -333,7 +333,7 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
   assertEquals(context.getWrittenResources(), []);
 });
 
-Deno.test("lookup honors parent cancellation without retrying", async () => {
+Deno.test("listSprites honors parent cancellation without retrying", async () => {
   const controller = new AbortController();
   controller.abort(new DOMException("cancelled", "AbortError"));
   const context = testContext(globalArgs, { signal: controller.signal });
@@ -350,7 +350,7 @@ Deno.test("lookup honors parent cancellation without retrying", async () => {
           return emptyPage();
         },
         () =>
-          model.methods.lookup.execute(
+          model.methods.listSprites.execute(
             {},
             context,
           ),
@@ -384,8 +384,96 @@ Deno.test("inventory enforces one aggregate byte budget across all pages without
     withMockedFetch(() => {
       requests++;
       return requests === 1 ? response(first) : emptyPage();
-    }, () => model.methods.lookup.execute({}, test)), Error);
+    }, () => model.methods.listSprites.execute({}, test)), Error);
   assertStringIncludes(error.message, "maxResponseBytes");
   assertEquals(requests, 2);
   assertEquals(test.getWrittenResources(), []);
+});
+
+const policy = {
+  allow_all: false,
+  sprite_labels: ["production", "worker"],
+  name_prefix: "jobs-",
+  allowed_endpoints: ["/chat.postMessage", "/chat.*"],
+  blocked_endpoints: ["/chat.delete"],
+};
+
+const connectionBase = {
+  id: "connection-1",
+  provider: "slack",
+  provider_account_id: "team-1",
+  provider_account_name: "Acme",
+  scopes: "chat:write,channels:read" as string | null,
+  connection_type: "oauth",
+  access_policy: policy,
+  provider_info: {
+    icon: "speech-bubble",
+    nested: { color: "aubergine", flags: [true, null, 3] },
+  },
+  user_id: "user-1" as string | null,
+  token_expires_at: "2026-09-10T12:00:00Z",
+  inserted_at: "2026-09-09T10:00:00Z",
+  updated_at: "2026-09-09T11:00:00Z",
+  usage_snippet: "fetch('/v1/gateway/slack/connection-1/...')",
+};
+
+function connection(overrides: Partial<typeof connectionBase> = {}) {
+  return { ...connectionBase, ...overrides };
+}
+
+Deno.test("list routes provider filtering and retains open provider_info metadata", async () => {
+  const context = testContext(globalArgs);
+
+  const { result, calls } = await withMockedFetch(
+    [response({ connections: [connection()] })],
+    () =>
+      model.methods.listConnectors.execute(
+        { provider: "slack" },
+        context,
+      ),
+  );
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "GET");
+  const url = new URL(calls[0].url);
+  assertEquals(url.pathname, "/v1/oauth/connections");
+  assertEquals(url.searchParams.get("provider"), "slack");
+  assertEquals(
+    calls[0].headers.authorization,
+    "Bearer test-token",
+  );
+  assertEquals(result.dataHandles.length, 1);
+  const writes = context.getWrittenResources();
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].specName, "connectors");
+  assertEquals(writes[0].data, {
+    connections: [connection()],
+  });
+});
+
+Deno.test("list omits the optional provider query field", async () => {
+  const context = testContext(globalArgs);
+
+  const { calls } = await withMockedFetch(
+    [response({ connections: [] })],
+    () => model.methods.listConnectors.execute({}, context),
+  );
+
+  assertEquals(new URL(calls[0].url).search, "");
+});
+
+Deno.test("invalid API output fails without writing a resource", async () => {
+  const context = testContext(globalArgs);
+
+  const error = await assertRejects(
+    () =>
+      withMockedFetch(
+        [response({ connections: [{ id: "incomplete" }] })],
+        () => model.methods.listConnectors.execute({}, context),
+      ),
+    Error,
+  );
+
+  assertStringIncludes(error.message, "invalid JSON response");
+  assertEquals(context.getWrittenResources(), []);
 });

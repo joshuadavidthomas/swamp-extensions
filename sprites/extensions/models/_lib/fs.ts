@@ -103,7 +103,7 @@ export const WatchArgs = z.object({
 });
 
 function fsPath(ctx: SpriteContext, operation: string): string {
-  return spritePath(ctx, `/fs/${operation}`);
+  return spritePath(ctx.globalArgs.name, `/fs/${operation}`);
 }
 function watchError(message: string | undefined, token: string): Error {
   const reason = message === undefined

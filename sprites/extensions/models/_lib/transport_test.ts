@@ -484,6 +484,7 @@ Deno.test("executeHttp uses real hostname-checked TLS and decodes exact HTTP chu
     let tlsOptions: tls.ConnectionOptions | undefined;
     const result = await executeHttp(
       ctx,
+      ctx.globalArgs.name,
       { cmd: ["printf", "a b"], env: ["A=1", "B=two"] },
       input,
       ((options: tls.ConnectionOptions) => {
@@ -510,6 +511,7 @@ Deno.test("executeHttp uses real hostname-checked TLS and decodes exact HTTP chu
     });
     const empty = await executeHttp(
       ctx,
+      ctx.globalArgs.name,
       { cmd: ["true"] },
       new Uint8Array(),
       ((options: tls.ConnectionOptions) => {

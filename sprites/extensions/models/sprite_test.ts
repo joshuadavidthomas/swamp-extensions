@@ -22,7 +22,7 @@ const replacement = {
 Deno.test("Sprite names reject dot segments and uploads reject host filesystem paths", () => {
   for (const name of [".", ".."]) {
     assertThrows(
-      () => spritePath(testContext({ ...globals, name })),
+      () => spritePath(name),
       Error,
       "dot segment",
     );
@@ -108,14 +108,12 @@ Deno.test("mutations require a saved identity before adopting an existing Sprite
         "No Sprite identity is saved",
       ),
   );
-  assertEquals(calls.length, 1);
-  assertEquals(calls[0].method, "GET");
+  assertEquals(calls.length, 0);
   assertEquals(test.getWrittenResources(), []);
 });
 
-Deno.test("checkpoint, execution, attachment, and gateway mutations refuse a replaced Sprite", async () => {
+Deno.test("execution, attachment, and gateway mutations refuse a replaced Sprite", async () => {
   const cases = [
-    { name: "createCheckpoint", args: {} },
     { name: "exec", args: { cmd: ["echo", "hello"] } },
     { name: "execHttp", args: { cmd: ["echo", "hello"] } },
     { name: "attach", args: { session_id: "7" } },
@@ -150,4 +148,49 @@ Deno.test("checkpoint, execution, attachment, and gateway mutations refuse a rep
     assertEquals(test.getWrittenResources(), []);
     assertEquals(test.getWrittenFiles(), []);
   }
+});
+
+Deno.test("Sprite assembly exposes exactly its lifecycle, routes, and collection reads", () => {
+  assertEquals(
+    Object.keys(model.methods).sort(),
+    [
+      "create",
+      "lookup",
+      "update",
+      "upgrade",
+      "restart",
+      "probeUrl",
+      "delete",
+      "listFiles",
+      "readFile",
+      "writeFile",
+      "deleteFile",
+      "copyFile",
+      "renameFile",
+      "chmodFile",
+      "chownFile",
+      "watch",
+      "getNetworkPolicy",
+      "setNetworkPolicy",
+      "getPrivilegesPolicy",
+      "setPrivilegesPolicy",
+      "deletePrivilegesPolicy",
+      "getResourcesPolicy",
+      "setResourcesPolicy",
+      "deleteResourcesPolicy",
+      "watchPorts",
+      "proxy",
+      "controlExec",
+      "exec",
+      "execHttp",
+      "attach",
+      "listSessions",
+      "killSession",
+      "listServices",
+      "listCheckpoints",
+      "listTasks",
+      "gatewayList",
+      "gatewayRequest",
+    ].sort(),
+  );
 });

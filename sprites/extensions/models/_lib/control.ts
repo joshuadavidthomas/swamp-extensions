@@ -323,7 +323,7 @@ export async function executeControl(
     budget.check(TIMEOUT_MESSAGE);
     channel = await connect(
       { ...ctx, signal },
-      spritePath(ctx, "/control"),
+      spritePath(ctx.globalArgs.name, "/control"),
     );
     budget.check(TIMEOUT_MESSAGE);
     let received = 0;

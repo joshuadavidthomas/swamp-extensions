@@ -25,6 +25,16 @@ export const SpriteArgsSchema = AuthSchema.extend({
 });
 /** Single-Sprite method context. */
 export type SpriteContext = Context<z.output<typeof SpriteArgsSchema>>;
+/** A child of one Sprite (service, checkpoint, task) names its parent and nothing else about it. */
+export const ChildArgsSchema = AuthSchema.extend({
+  sprite: z.string().min(1).describe(
+    "Name of the Sprite this belongs to.",
+  ),
+});
+/** Child method context. */
+export type ChildContext = Context<z.output<typeof ChildArgsSchema>>;
+/** The Sprite a child instance bound to. Mutations refuse a Sprite whose id has changed since. */
+export const SpriteIdentity = z.object({ name: z.string(), id: z.string() });
 /** API response metadata; environment values are intentionally excluded. */
 export const SpriteResponse = z.object({
   id: z.string(),
@@ -59,23 +69,33 @@ const SpriteConfig = z.object({
   storage_gb: z.number().positive().optional(),
 });
 
-/** Construct a path relative to the configured Sprite. */
-export function spritePath(
-  ctx: Pick<SpriteContext, "globalArgs">,
-  suffix = "",
-): string {
-  return `/v1/sprites/${segment(ctx.globalArgs.name)}${suffix}`;
+/** Construct a path relative to a named Sprite. */
+export function spritePath(name: string, suffix = ""): string {
+  return `/v1/sprites/${segment(name)}${suffix}`;
 }
-/** Fetch identity before a destructive operation and reject a replaced Sprite when state is available. */
-export async function verifySprite(
-  ctx: SpriteContext,
+/** Read the Sprite and refuse it when its id is not the one this instance saved. */
+async function verifyIdentity(
+  ctx: Context,
+  name: string,
+  savedId: string | undefined,
 ): Promise<z.output<typeof SpriteResponse>> {
   const current = await jsonRequest(
     ctx,
     "GET",
-    spritePath(ctx),
+    spritePath(name),
     SpriteResponse,
   );
+  if (savedId !== current.id) {
+    throw new Error(
+      "The Sprite was replaced since its saved state. Run lookup and verify the new ID before mutating it.",
+    );
+  }
+  return current;
+}
+/** Sprite model: mutations require the identity saved by create or lookup. */
+export async function verifySprite(
+  ctx: SpriteContext,
+): Promise<z.output<typeof SpriteResponse>> {
   const value = await ctx.readResource("state");
   if (value === null) {
     throw new Error(
@@ -83,12 +103,50 @@ export async function verifySprite(
     );
   }
   const stored = z.object({ id: SpriteResponse.shape.id }).safeParse(value);
-  if (!stored.success || stored.data.id !== current.id) {
-    throw new Error(
-      "The Sprite was replaced since its saved state. Run lookup and verify the new ID before mutating it.",
+  return verifyIdentity(
+    ctx,
+    ctx.globalArgs.name,
+    stored.success ? stored.data.id : undefined,
+  );
+}
+/** The Sprite id a child instance saved in its own state resource, if it has bound. */
+async function savedParent(
+  ctx: ChildContext,
+  spec: string,
+): Promise<string | undefined> {
+  const stored = z.object({ sprite: SpriteIdentity }).safeParse(
+    await ctx.readResource(spec),
+  );
+  return stored.success ? stored.data.sprite.id : undefined;
+}
+/** Child models, when creating or looking up: verify a bound Sprite, or read an unbound one so the caller can bind it. */
+export async function bindSprite(
+  ctx: ChildContext,
+  spec: string,
+): Promise<z.output<typeof SpriteResponse>> {
+  const savedId = await savedParent(ctx, spec);
+  if (savedId === undefined) {
+    return jsonRequest(
+      ctx,
+      "GET",
+      spritePath(ctx.globalArgs.sprite),
+      SpriteResponse,
     );
   }
-  return current;
+  return verifyIdentity(ctx, ctx.globalArgs.sprite, savedId);
+}
+/** Child models, for every other method: the instance must already be bound to its Sprite. */
+export async function boundSprite(
+  ctx: ChildContext,
+  spec: string,
+): Promise<z.output<typeof SpriteResponse>> {
+  const savedId = await savedParent(ctx, spec);
+  if (savedId === undefined) {
+    throw new Error(
+      `No Sprite identity is saved for this ${spec}. Create or look it up first.`,
+    );
+  }
+  return verifyIdentity(ctx, ctx.globalArgs.sprite, savedId);
 }
 
 export const spriteResources = {
@@ -113,10 +171,19 @@ export const spriteMethods = {
     }),
     "state",
     SpriteResponse,
-    (args, ctx: SpriteContext) =>
-      jsonRequest(ctx, "POST", "/v1/sprites", SpriteResponse, {
+    async (args, ctx: SpriteContext) => {
+      const saved = z.object({ id: z.string() }).safeParse(
+        await ctx.readResource("state"),
+      );
+      if (saved.success) {
+        throw new Error(
+          "A Sprite identity is already saved. Use another instance to create a Sprite.",
+        );
+      }
+      return await jsonRequest(ctx, "POST", "/v1/sprites", SpriteResponse, {
         json: { name: ctx.globalArgs.name, ...args },
-      }),
+      });
+    },
   ),
   lookup: method(
     "Read the configured Sprite",
@@ -124,7 +191,7 @@ export const spriteMethods = {
     "state",
     SpriteResponse,
     (_args, ctx: SpriteContext) =>
-      jsonRequest(ctx, "GET", spritePath(ctx), SpriteResponse),
+      jsonRequest(ctx, "GET", spritePath(ctx.globalArgs.name), SpriteResponse),
   ),
   update: method(
     "Update the configured Sprite",
@@ -141,9 +208,15 @@ export const spriteMethods = {
     SpriteResponse,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      return await jsonRequest(ctx, "PUT", spritePath(ctx), SpriteResponse, {
-        json: args,
-      });
+      return await jsonRequest(
+        ctx,
+        "PUT",
+        spritePath(ctx.globalArgs.name),
+        SpriteResponse,
+        {
+          json: args,
+        },
+      );
     },
   ),
   // Not in sprites.dev/api or docs.sprites.dev; verified live.
@@ -156,7 +229,7 @@ export const spriteMethods = {
       await emptyRequest(
         ctx,
         "POST",
-        spritePath(ctx, "/upgrade"),
+        spritePath(ctx.globalArgs.name, "/upgrade"),
         args.version === undefined ? {} : { json: { version: args.version } },
       );
     },
@@ -168,7 +241,11 @@ export const spriteMethods = {
     null,
     async (_args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      await emptyRequest(ctx, "POST", spritePath(ctx, "/restart"));
+      await emptyRequest(
+        ctx,
+        "POST",
+        spritePath(ctx.globalArgs.name, "/restart"),
+      );
     },
   ),
   probeUrl: method(
@@ -228,7 +305,7 @@ export const spriteMethods = {
         return;
       }
       try {
-        await emptyRequest(ctx, "DELETE", spritePath(ctx));
+        await emptyRequest(ctx, "DELETE", spritePath(ctx.globalArgs.name));
       } catch (error) {
         if (!(error instanceof ApiError && error.status === 404)) throw error;
       }

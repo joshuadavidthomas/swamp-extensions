@@ -258,7 +258,7 @@ export async function observeChannel<F, E, T>(
     check();
     channel = await options.connect(
       { ...ctx, signal },
-      spritePath(ctx, options.path),
+      spritePath(ctx.globalArgs.name, options.path),
     );
     check();
     if (options.subscribe !== undefined) {

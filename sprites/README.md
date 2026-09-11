@@ -4,11 +4,14 @@
 [Sprites](https://sprites.dev): execution, files, services, checkpoints,
 policies, networking, and connectors.
 
-| Model type                   | Scope                                   |
-| ---------------------------- | --------------------------------------- |
-| `@josh/sprites/organization` | Organization inventory                  |
-| `@josh/sprites/sprite`       | One named Sprite                        |
-| `@josh/sprites/connectors`   | Connector creation, policies, and OAuth |
+| Model type                   | Scope                                                            |
+| ---------------------------- | ---------------------------------------------------------------- |
+| `@josh/sprites/organization` | The token's Fly organization and its Sprite and connector lists. |
+| `@josh/sprites/sprite`       | One named Sprite: execution, files, policies, and networking.    |
+| `@josh/sprites/service`      | One Sprite service: definition, lifecycle, logs, and signal.     |
+| `@josh/sprites/checkpoint`   | One named slot holding a Sprite checkpoint.                      |
+| `@josh/sprites/task`         | One task hold on a Sprite.                                       |
+| `@josh/sprites/connector`    | One organization connection: policy and OAuth.                   |
 
 ## Setup
 
@@ -29,6 +32,10 @@ swamp vault put sprites-secrets API_TOKEN
 swamp model create @josh/sprites/sprite build-sprite \
   --global-arg name=build-worker \
   --global-arg 'token=${{ vault.get("sprites-secrets", "API_TOKEN") }}'
+swamp model method run build-sprite create
+swamp model create @josh/sprites/service build-web \
+  --global-arg sprite=build-worker --global-arg service_name=web \
+  --global-arg 'token=${{ vault.get("sprites-secrets", "API_TOKEN") }}'
 ```
 
 The token determines the organization. Use separate model instances and vault
@@ -36,11 +43,11 @@ keys for different organizations.
 
 ## Usage
 
-Creating the model above only saves local configuration. The following commands
-create a remote Sprite and run code on it; provider charges apply:
+The setup creates a remote Sprite; provider charges apply. Configure its service
+and run code on it:
 
 ```sh
-swamp model method run build-sprite create
+swamp model method run build-web put --input '{"service":{"cmd":"python3","args":["-m","http.server","8080"],"http_port":8080}}'
 swamp model method run build-sprite exec --input '{"cmd":["python3","-c","print(6 * 7)"]}'
 swamp data get build-sprite stdout
 ```
@@ -59,7 +66,7 @@ Find methods, arguments, and output schemas through Swamp:
 ```sh
 swamp model type describe @josh/sprites/sprite --json
 swamp model type describe @josh/sprites/organization --json
-swamp model type describe @josh/sprites/connectors --json
+swamp model type describe @josh/sprites/connector --json
 ```
 
 File writes, exec stdin, and gateway bodies accept
@@ -79,19 +86,19 @@ Reference stored results in model definitions with CEL, for example
   Sprite and connector operations default to five minutes. Set `timeoutMs` and
   `maxResponseBytes` in model global arguments when needed. After a failed
   mutation, inspect remote state before retrying.
-- `upgrade` and machine `restart` record request acceptance. Check the resulting
+- Sprite `upgrade` and `restart` record request acceptance. Check the resulting
   runtime separately. Service startup events also need an application readiness
   check.
-- `getService`, `signalService`, and task methods use `/usr/bin/curl` against
-  `/.sprite/api.sock` through authenticated exec. They require a saved Sprite
-  identity. The organization token stays outside the Sprite.
+- Service `signal`, Sprite `listTasks`, and task `create`, `get`, `refresh`, and
+  `delete` use `/usr/bin/curl` against `/.sprite/api.sock` through authenticated
+  exec. Child models save their Sprite identity; later calls reject a
+  replacement. The organization token stays outside the Sprite.
 - The TCP proxy runs over an authenticated exec relay and requires
   `/.sprite/bin/python3` inside the Sprite. Sized TTY commands also require it.
-  The API's native proxy and the control-channel proxy were tested live and
-  did not forward TCP closure to the client, which is why the exec relay is
-  used.
+  The API's native proxy and the control-channel proxy were tested live and did
+  not forward TCP closure to the client, which is why the exec relay is used.
 - Stopping a service does not prevent its startup after reboot. Delete its
-  definition for that. Explicitly stopped HTTP services need `startService` to
+  definition for that. Explicitly stopped HTTP services need service `start` to
   resume; an incoming request alone does not start them.
 - Checkpoints restore the writable overlay. They do not roll back `/tmp`. Task
   snapshots do not renew holds; refresh or release tasks explicitly.

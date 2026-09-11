@@ -70,7 +70,10 @@ export function testContext<G extends Auth>(
     NonNullable<Parameters<typeof createModelTestContext>[0]>,
     "signal" | "storedResources"
   > = {},
-): Context<G> & Omit<ReturnType<typeof createModelTestContext>, "context"> {
+): Context<G> & Omit<ReturnType<typeof createModelTestContext>, "context"> & {
+  getDeletedResources(): string[];
+} {
+  const deleted: string[] = [];
   const { context, ...accessors } = createModelTestContext({
     globalArgs,
     ...options,
@@ -80,7 +83,11 @@ export function testContext<G extends Auth>(
     ...accessors,
     globalArgs,
     signal: options.signal ?? context.signal,
-    deleteResource: () => Promise.resolve(),
+    deleteResource: (spec) => {
+      deleted.push(spec);
+      return Promise.resolve();
+    },
+    getDeletedResources: () => [...deleted],
   };
 }
 
@@ -101,6 +108,13 @@ export const globalArgs = {
   timeoutMs: 30_000,
   maxResponseBytes: 1_000_000,
   name: "demo sprite",
+};
+export const childArgs = {
+  token: globalArgs.token,
+  baseUrl: globalArgs.baseUrl,
+  timeoutMs: globalArgs.timeoutMs,
+  maxResponseBytes: globalArgs.maxResponseBytes,
+  sprite: globalArgs.name,
 };
 export const sprite = {
   id: "sprite-1",
@@ -147,7 +161,7 @@ export function registerRouteCases(routeCases: RouteCase[]): void {
   Deno.test("every JSON and NDJSON REST method uses its provider route and writes validated output", async () => {
     for (const testCase of routeCases) {
       const context = testContext(globalArgs, {
-        storedResources: { state: sprite },
+        storedResources: testCase.name === "create" ? {} : { state: sprite },
       });
       const responses = testCase.verifies
         ? [json(sprite), testCase.response]

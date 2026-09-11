@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 import { assertEquals, assertRejects } from "@std/assert";
 import { withMockedFetch } from "@swamp-club/swamp-testing";
-import {
-  createManagementMethods,
-  type ManagementExec,
-  TaskExpiry,
-} from "./local-api.ts";
-import { testContext } from "./test_support.ts";
+import { type ManagementExec } from "./_lib/local-api.ts";
+import { createMethods } from "./task.ts";
+import { TaskExpiry } from "./_lib/tasks.ts";
+import { testContext } from "./_lib/test_support.ts";
 
 const globalArgs = {
   token: "test-token",
   baseUrl: "https://api.sprites.dev",
-  name: "demo",
+  sprite: "demo",
+  name: "task /;$(x)",
   timeoutMs: 1000,
   maxResponseBytes: 10000,
 };
@@ -29,17 +28,6 @@ const task = {
   started_at: "2026-09-10T00:00:00Z",
   expires_at: "2026-09-10T00:01:00Z",
 };
-const service = {
-  name: "web/API",
-  cmd: "node",
-  args: null,
-  needs: null,
-  state: {
-    name: "web/API",
-    status: "running",
-    pid: 42,
-  },
-};
 const bytes = (text: string) => new TextEncoder().encode(text);
 const result = (
   body = "",
@@ -52,7 +40,9 @@ const result = (
 });
 function setup(stored = true) {
   return testContext(globalArgs, {
-    storedResources: stored ? { state: sprite } : {},
+    storedResources: stored
+      ? { task: { ...task, sprite: { name: sprite.name, id: sprite.id } } }
+      : {},
   });
 }
 const identity = () => new Response(JSON.stringify(sprite));
@@ -60,38 +50,8 @@ const identity = () => new Response(JSON.stringify(sprite));
 Deno.test("management methods use fixed local routes, stdin JSON and typed outputs", async () => {
   const cases = [
     {
-      method: "getService",
-      input: { service_name: service.name },
-      verb: "GET",
-      path: `/v1/services/${encodeURIComponent(service.name)}`,
-      status: 200,
-      response: JSON.stringify(service),
-      spec: "service",
-      output: service,
-    },
-    {
-      method: "signalService",
-      input: { service_name: task.name, signal: "USR1" },
-      verb: "POST",
-      path: "/v1/services/signal",
-      body: { name: task.name, signal: "USR1" },
-      status: 204,
-      response: "",
-      output: undefined,
-    },
-    {
-      method: "listTasks",
+      method: "get",
       input: {},
-      verb: "GET",
-      path: "/v1/tasks",
-      status: 200,
-      response: JSON.stringify({ tasks: [task] }),
-      spec: "tasks",
-      output: { tasks: [task] },
-    },
-    {
-      method: "getTask",
-      input: { name: task.name },
       verb: "GET",
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       status: 200,
@@ -100,30 +60,30 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       output: task,
     },
     {
-      method: "createTask",
-      input: { name: task.name, expire: 60 },
+      method: "create",
+      input: { expire: 60 },
       verb: "POST",
       path: "/v1/tasks",
       body: { name: task.name, expire: 60 },
       status: 201,
       response: "unpublished success body",
-      spec: "taskCreated",
-      output: { name: task.name, expire: 60 },
+      spec: "task",
+      output: task,
     },
     {
-      method: "refreshTask",
-      input: { name: task.name, expire: "30s" },
+      method: "refresh",
+      input: { expire: "30s" },
       verb: "PUT",
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       body: { expire: "30s" },
       status: 200,
       response: "",
-      spec: "taskRefreshed",
-      output: { name: task.name, expire: "30s" },
+      spec: "task",
+      output: task,
     },
     {
-      method: "deleteTask",
-      input: { name: task.name },
+      method: "delete",
+      input: {},
       verb: "DELETE",
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       status: 204,
@@ -131,8 +91,8 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       output: undefined,
     },
     {
-      method: "deleteTask",
-      input: { name: task.name },
+      method: "delete",
+      input: {},
       verb: "DELETE",
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       status: 404,
@@ -143,9 +103,20 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
   for (const c of cases) {
     const test = setup();
     let called = 0;
-    const execute: ManagementExec = (_ctx, query, input) => {
+    const execute: ManagementExec = (_ctx, name, query, input) => {
+      assertEquals(name, globalArgs.sprite);
       called++;
       const cmd = query.cmd as string[];
+      if (called === 2) {
+        assertEquals(cmd[cmd.indexOf("--request") + 1], "GET");
+        assertEquals(
+          cmd.at(-1),
+          `http://sprite/v1/tasks/${encodeURIComponent(task.name)}`,
+        );
+        assertEquals(query.stdin, false);
+        assertEquals(new TextDecoder().decode(input), "");
+        return Promise.resolve(result(JSON.stringify(task), 200));
+      }
       assertEquals(cmd.slice(0, 2), ["/usr/bin/curl", "--disable"]);
       assertEquals(cmd[cmd.indexOf("--unix-socket") + 1], "/.sprite/api.sock");
       assertEquals(cmd[cmd.indexOf("--request") + 1], c.verb);
@@ -161,70 +132,28 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       assertEquals(query.stdin, "body" in c);
       return Promise.resolve(result(c.response, c.status));
     };
-    const methods = createManagementMethods(execute);
+    const methods = createMethods(execute);
     const { calls } = await withMockedFetch(
       [identity()],
       () => methods[c.method].execute(c.input as never, test),
     );
     assertEquals(calls.length, 1);
-    assertEquals(called, 1);
+    assertEquals(
+      called,
+      c.method === "create" || c.method === "refresh" ? 2 : 1,
+    );
+    if (c.method === "delete") {
+      assertEquals(test.getDeletedResources(), ["task"]);
+    }
     if (c.output !== undefined) {
       const written = test.getWrittenResources()[0];
       assertEquals(written.specName, c.spec);
-      assertEquals(written.data, c.output);
+      assertEquals(written.data, {
+        ...c.output,
+        sprite: { name: sprite.name, id: sprite.id },
+      });
     }
   }
-});
-
-Deno.test("getService rejects invalid shapes, HTTP errors, and malformed JSON", async () => {
-  for (
-    const response of [
-      result(JSON.stringify({ ...service, needs: undefined }), 200),
-      result("not found", 404),
-      result("{broken", 200),
-    ]
-  ) {
-    const test = setup();
-    let count = 0;
-    const methods = createManagementMethods((_ctx, query) => {
-      count++;
-      assertEquals(query.stdin, false);
-      return Promise.resolve(response);
-    });
-    await assertRejects(
-      () =>
-        withMockedFetch(
-          [identity()],
-          () =>
-            methods.getService.execute(
-              { service_name: service.name },
-              test,
-            ),
-        ),
-      Error,
-    );
-    assertEquals(count, 1);
-    assertEquals(test.getWrittenResources(), []);
-  }
-});
-
-Deno.test("getService requires the saved Sprite identity before local exec", async () => {
-  const test = setup(false);
-  let count = 0;
-  const methods = createManagementMethods(() => {
-    count++;
-    return Promise.resolve(result(JSON.stringify(service), 200));
-  });
-  await assertRejects(
-    () =>
-      withMockedFetch(
-        [],
-        () => methods.getService.execute({ service_name: service.name }, test),
-      ),
-    Error,
-  );
-  assertEquals(count, 0);
-  assertEquals(test.getWrittenResources(), []);
 });
 
 Deno.test("management failures are sanitized and never replay a mutation", async () => {
@@ -248,7 +177,7 @@ Deno.test("management failures are sanitized and never replay a mutation", async
   ) {
     const test = setup();
     let count = 0;
-    const methods = createManagementMethods(() => {
+    const methods = createMethods(() => {
       count++;
       return Promise.resolve(response);
     });
@@ -256,65 +185,12 @@ Deno.test("management failures are sanitized and never replay a mutation", async
       () =>
         withMockedFetch(
           [identity()],
-          () => methods.createTask.execute({ name: "agent", expire: 60 }, test),
+          () => methods.create.execute({ expire: 60 }, test),
         ),
       Error,
     );
     assertEquals(error.message.includes("secret"), false);
     assertEquals(count, 1);
-    assertEquals(test.getWrittenResources(), []);
-  }
-});
-
-Deno.test("management reads reject invalid JSON and invalid shapes", async () => {
-  for (
-    const body of [
-      "broken secret",
-      '{"tasks":[{"name":"secret"}]}',
-      '{"tasks":null}',
-      "[]",
-    ]
-  ) {
-    const test = setup();
-    const methods = createManagementMethods(() =>
-      Promise.resolve(result(body, 200))
-    );
-    const error = await assertRejects(
-      () =>
-        withMockedFetch(
-          [identity()],
-          () => methods.listTasks.execute({}, test),
-        ),
-      Error,
-    );
-    assertEquals(error.message.includes("secret"), false);
-    assertEquals(test.getWrittenResources(), []);
-  }
-});
-
-Deno.test("management refuses missing or replaced Sprite identity before exec", async () => {
-  for (const stored of [false, true]) {
-    const test = setup(stored);
-    let count = 0;
-    const methods = createManagementMethods(() => {
-      count++;
-      return Promise.resolve(result());
-    });
-    await assertRejects(
-      () =>
-        withMockedFetch(
-          stored
-            ? [new Response(JSON.stringify({ ...sprite, id: "replacement" }))]
-            : [],
-          () =>
-            methods.signalService.execute({
-              service_name: "web",
-              signal: "USR1",
-            }, test),
-        ),
-      Error,
-    );
-    assertEquals(count, 0);
     assertEquals(test.getWrittenResources(), []);
   }
 });
@@ -346,7 +222,7 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
     const controller = new AbortController();
     test.signal = controller.signal;
     test.globalArgs = { ...globalArgs, timeoutMs: 30 };
-    const methods = createManagementMethods(() => {
+    const methods = createMethods(() => {
       if (cancel) controller.abort();
       else {
         const deadline = performance.now() + 40;
@@ -360,10 +236,83 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
       () =>
         withMockedFetch(
           [identity()],
-          () => methods.createTask.execute({ name: "agent", expire: 1 }, test),
+          () => methods.create.execute({ expire: 1 }, test),
         ),
       Error,
     );
+    assertEquals(test.getWrittenResources(), []);
+  }
+});
+
+Deno.test("task refuses unbound or replaced Sprite before local exec", async () => {
+  for (const stored of [false, true]) {
+    const test = setup(stored);
+    let count = 0;
+    const methods = createMethods(() => {
+      count++;
+      return Promise.resolve(result());
+    });
+    const { calls } = await withMockedFetch(
+      stored
+        ? [new Response(JSON.stringify({ ...sprite, id: "replacement" }))]
+        : [],
+      () =>
+        assertRejects(
+          () => methods.refresh.execute({ expire: 60 }, test),
+          Error,
+          stored ? "replaced" : "No Sprite identity is saved",
+        ),
+    );
+    assertEquals(count, 0);
+    assertEquals(calls.length, stored ? 1 : 0);
+    assertEquals(test.getWrittenResources(), []);
+  }
+});
+Deno.test("task create and get bind and save their Sprite identity", async () => {
+  for (const method of ["create", "get"] as const) {
+    const test = setup(false);
+    const methods = createMethods((_ctx, name, query) => {
+      assertEquals(name, globalArgs.sprite);
+      return Promise.resolve(
+        (query.cmd as string[]).includes("POST")
+          ? result("", 201)
+          : result(JSON.stringify(task), 200),
+      );
+    });
+    await withMockedFetch(
+      [identity()],
+      () =>
+        methods[method].execute(
+          methods[method].arguments.parse({ expire: 60 }) as never,
+          test,
+        ),
+    );
+    assertEquals(test.getWrittenResources()[0].data, {
+      ...task,
+      sprite: { name: sprite.name, id: sprite.id },
+    });
+  }
+});
+Deno.test("task get rejects invalid shapes, HTTP errors, and malformed JSON", async () => {
+  for (
+    const response of [
+      result(JSON.stringify({ name: task.name }), 200),
+      result("missing", 404),
+      result("{broken", 200),
+    ]
+  ) {
+    const test = setup();
+    let count = 0;
+    const methods = createMethods((_ctx, _name, query) => {
+      count++;
+      assertEquals(query.stdin, false);
+      return Promise.resolve(response);
+    });
+    await withMockedFetch(
+      [identity()],
+      () => assertRejects(() => methods.get.execute({}, test), Error),
+    );
+    assertEquals(count, 1);
     assertEquals(test.getWrittenResources(), []);
   }
 });

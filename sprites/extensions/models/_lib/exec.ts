@@ -5,6 +5,7 @@ import {
   apiUrl,
   BinaryFile,
   concatenate,
+  type Context,
   decodeFrame,
   Input,
   inputBytes,
@@ -329,12 +330,13 @@ export async function decodeHttpExec(
 
 /** Execute over TLS with HTTP/1.1 framing intact; never replay a command on failure. */
 export async function executeHttp(
-  ctx: SpriteContext,
+  ctx: Context,
+  sprite: string,
   query: Query,
   input = new Uint8Array(),
   connect: typeof connectTls = connectTls,
 ): Promise<CommandResult> {
-  const url = apiUrl(ctx.globalArgs, spritePath(ctx, "/exec"), query);
+  const url = apiUrl(ctx.globalArgs, spritePath(sprite, "/exec"), query);
   const signal = AbortSignal.any([
     ctx.signal,
     AbortSignal.timeout(ctx.globalArgs.timeoutMs),
@@ -466,7 +468,10 @@ export async function executeSocket(
   };
   const channel = await connect(
     ctx,
-    spritePath(ctx, attaching ? `/exec/${segment(args.session_id)}` : "/exec"),
+    spritePath(
+      ctx.globalArgs.name,
+      attaching ? `/exec/${segment(args.session_id)}` : "/exec",
+    ),
     query,
   );
   const stdout: Uint8Array[] = [], stderr: Uint8Array[] = [];
@@ -688,7 +693,7 @@ export const execMethods = {
     Execution,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const result = await executeHttp(ctx, {
+      const result = await executeHttp(ctx, ctx.globalArgs.name, {
         cmd: args.cmd,
         path: args.path,
         dir: args.dir,
@@ -712,7 +717,7 @@ export const execMethods = {
       jsonRequest(
         ctx,
         "GET",
-        spritePath(ctx, "/exec"),
+        spritePath(ctx.globalArgs.name, "/exec"),
         Sessions,
       ),
   ),
@@ -730,7 +735,10 @@ export const execMethods = {
       const events = await ndjson(
         ctx,
         "POST",
-        spritePath(ctx, `/exec/${segment(args.session_id)}/kill`),
+        spritePath(
+          ctx.globalArgs.name,
+          `/exec/${segment(args.session_id)}/kill`,
+        ),
         KillEvent,
         { query: { signal: args.signal, timeout: args.timeout } },
       );

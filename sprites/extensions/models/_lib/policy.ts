@@ -43,7 +43,7 @@ export const policyMethods = {
       jsonRequest(
         ctx,
         "GET",
-        spritePath(ctx, "/policy/network"),
+        spritePath(ctx.globalArgs.name, "/policy/network"),
         NetworkPolicy,
       ),
   ),
@@ -53,9 +53,14 @@ export const policyMethods = {
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      await emptyRequest(ctx, "POST", spritePath(ctx, "/policy/network"), {
-        json: args,
-      });
+      await emptyRequest(
+        ctx,
+        "POST",
+        spritePath(ctx.globalArgs.name, "/policy/network"),
+        {
+          json: args,
+        },
+      );
     },
   ),
   getPrivilegesPolicy: method(
@@ -67,7 +72,7 @@ export const policyMethods = {
       jsonRequest(
         ctx,
         "GET",
-        spritePath(ctx, "/policy/privileges"),
+        spritePath(ctx.globalArgs.name, "/policy/privileges"),
         PrivilegesPolicy,
       ),
   ),
@@ -77,9 +82,14 @@ export const policyMethods = {
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      await emptyRequest(ctx, "POST", spritePath(ctx, "/policy/privileges"), {
-        json: args,
-      });
+      await emptyRequest(
+        ctx,
+        "POST",
+        spritePath(ctx.globalArgs.name, "/policy/privileges"),
+        {
+          json: args,
+        },
+      );
     },
   ),
   deletePrivilegesPolicy: method(
@@ -88,7 +98,11 @@ export const policyMethods = {
     null,
     async (_args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      await emptyRequest(ctx, "DELETE", spritePath(ctx, "/policy/privileges"));
+      await emptyRequest(
+        ctx,
+        "DELETE",
+        spritePath(ctx.globalArgs.name, "/policy/privileges"),
+      );
     },
   ),
   getResourcesPolicy: method(
@@ -100,7 +114,7 @@ export const policyMethods = {
       jsonRequest(
         ctx,
         "GET",
-        spritePath(ctx, "/policy/resources"),
+        spritePath(ctx.globalArgs.name, "/policy/resources"),
         ResourcesPolicy,
       ),
   ),
@@ -110,9 +124,14 @@ export const policyMethods = {
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      await emptyRequest(ctx, "POST", spritePath(ctx, "/policy/resources"), {
-        json: args,
-      });
+      await emptyRequest(
+        ctx,
+        "POST",
+        spritePath(ctx.globalArgs.name, "/policy/resources"),
+        {
+          json: args,
+        },
+      );
     },
   ),
   deleteResourcesPolicy: method(
@@ -121,7 +140,11 @@ export const policyMethods = {
     null,
     async (_args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      await emptyRequest(ctx, "DELETE", spritePath(ctx, "/policy/resources"));
+      await emptyRequest(
+        ctx,
+        "DELETE",
+        spritePath(ctx.globalArgs.name, "/policy/resources"),
+      );
     },
   ),
 };

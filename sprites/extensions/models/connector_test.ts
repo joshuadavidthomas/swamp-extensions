@@ -3,9 +3,11 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { withMockedFetch } from "@swamp-club/swamp-testing";
 import { testContext } from "./_lib/test_support.ts";
-import { model } from "./connectors.ts";
+import { model } from "./connector.ts";
 
 const globalArgs = {
+  name: "connection-slot",
+  provider: "slack",
   token: "test-organization-token",
   baseUrl: "https://api.sprites.dev",
   timeoutMs: 30_000,
@@ -49,49 +51,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-Deno.test("list routes provider filtering and retains open provider_info metadata", async () => {
-  const context = testContext(globalArgs);
-
-  const { result, calls } = await withMockedFetch(
-    [jsonResponse({ connections: [connection()] })],
-    () =>
-      model.methods.list.execute(
-        { provider: "slack" },
-        context,
-      ),
-  );
-
-  assertEquals(calls.length, 1);
-  assertEquals(calls[0].method, "GET");
-  const url = new URL(calls[0].url);
-  assertEquals(url.pathname, "/v1/oauth/connections");
-  assertEquals(url.searchParams.get("provider"), "slack");
-  assertEquals(
-    calls[0].headers.authorization,
-    "Bearer test-organization-token",
-  );
-  assertEquals(result.dataHandles.length, 1);
-  const writes = context.getWrittenResources();
-  assertEquals(writes.length, 1);
-  assertEquals(writes[0].specName, "connections");
-  assertEquals(writes[0].data, {
-    connections: [connection()],
-  });
-});
-
-Deno.test("list omits the optional provider query field", async () => {
-  const context = testContext(globalArgs);
-
-  const { calls } = await withMockedFetch(
-    [jsonResponse({ connections: [] })],
-    () => model.methods.list.execute({}, context),
-  );
-
-  assertEquals(new URL(calls[0].url).search, "");
-});
-
 Deno.test("createApiKey sends snake_case credential and policy fields once", async () => {
-  const context = testContext(globalArgs);
+  const context = testContext({ ...globalArgs, provider: "custom_api" });
   const { getWrittenResources } = context;
   let requestBody: unknown;
 
@@ -108,7 +69,6 @@ Deno.test("createApiKey sends snake_case credential and policy fields once", asy
     () =>
       model.methods.createApiKey.execute(
         {
-          provider: "custom_api",
           api_key: "provider-secret",
           access_policy: policy,
         },
@@ -129,7 +89,7 @@ Deno.test("createApiKey sends snake_case credential and policy fields once", asy
 });
 
 Deno.test("provision sends only the provider and stores its connection", async () => {
-  const context = testContext(globalArgs);
+  const context = testContext({ ...globalArgs, provider: "openrouter" });
   const { getWrittenResources } = context;
   let requestBody: unknown;
 
@@ -147,7 +107,7 @@ Deno.test("provision sends only the provider and stores its connection", async (
     },
     () =>
       model.methods.provision.execute(
-        { provider: "openrouter" },
+        {},
         context,
       ),
   );
@@ -160,7 +120,7 @@ Deno.test("provision sends only the provider and stores its connection", async (
   );
   assertEquals(requestBody, { provider: "openrouter" });
   assertEquals(
-    getWrittenResources()[0].data.connection,
+    getWrittenResources()[0].data,
     connection({
       provider: "openrouter",
       connection_type: "provisioned",
@@ -171,14 +131,16 @@ Deno.test("provision sends only the provider and stores its connection", async (
   assertEquals(getWrittenResources().length, 1);
 });
 
-Deno.test("get encodes the organization-scoped connector id", async () => {
-  const context = testContext(globalArgs);
+Deno.test("get encodes the saved organization-scoped connector id", async () => {
+  const context = testContext(globalArgs, {
+    storedResources: { connection: connection({ id: "connection/one" }) },
+  });
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ connection: connection({ id: "connection/one" }) })],
     () =>
       model.methods.get.execute(
-        { id: "connection/one" },
+        {},
         context,
       ),
   );
@@ -186,13 +148,16 @@ Deno.test("get encodes the organization-scoped connector id", async () => {
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "GET");
   assertStringIncludes(calls[0].url, "/v1/oauth/connections/connection%2Fone");
-  assertEquals(context.getWrittenResources()[0].data, {
-    connection: connection({ id: "connection/one" }),
-  });
+  assertEquals(
+    context.getWrittenResources()[0].data,
+    connection({ id: "connection/one" }),
+  );
 });
 
 Deno.test("updatePolicy sends the complete replacement policy", async () => {
-  const context = testContext(globalArgs);
+  const context = testContext(globalArgs, {
+    storedResources: { connection: connection() },
+  });
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -202,7 +167,7 @@ Deno.test("updatePolicy sends the complete replacement policy", async () => {
     },
     () =>
       model.methods.updatePolicy.execute(
-        { id: "connection-1", access_policy: policy },
+        { access_policy: policy },
         context,
       ),
   );
@@ -217,46 +182,48 @@ Deno.test("updatePolicy sends the complete replacement policy", async () => {
   assertEquals(context.getWrittenResources().length, 1);
 });
 
-Deno.test("delete sends one DELETE and stores the id", async () => {
-  const context = testContext(globalArgs);
+Deno.test("delete sends one DELETE and clears the saved id", async () => {
+  const context = testContext(globalArgs, {
+    storedResources: { connection: connection() },
+  });
 
   const { result, calls } = await withMockedFetch(
     [new Response(null, { status: 204 })],
     () =>
       model.methods.delete.execute(
-        { id: "connection-1" },
+        {},
         context,
       ),
   );
 
   assertEquals(calls.map((call) => call.method), ["DELETE"]);
-  assertEquals(result.dataHandles.length, 1);
+  assertEquals(result.dataHandles.length, 0);
   const writes = context.getWrittenResources();
-  assertEquals(writes.length, 1);
-  assertEquals(writes[0].specName, "deletion");
-  assertEquals(writes[0].data, { id: "connection-1" });
+  assertEquals(writes.length, 0);
+  assertEquals(context.getDeletedResources(), ["connection"]);
 });
 
 Deno.test("delete accepts a 404 as an already-completed deletion", async () => {
-  const context = testContext(globalArgs);
+  const context = testContext(globalArgs, {
+    storedResources: { connection: connection() },
+  });
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ error: "not found" }, 404)],
     () =>
       model.methods.delete.execute(
-        { id: "connection-1" },
+        {},
         context,
       ),
   );
 
   assertEquals(calls.map((call) => call.method), ["DELETE"]);
-  assertEquals(context.getWrittenResources()[0].data, {
-    id: "connection-1",
-  });
+  assertEquals(context.getWrittenResources(), []);
+  assertEquals(context.getDeletedResources(), ["connection"]);
 });
 
 Deno.test("authorize sends OAuth query fields and stores sensitive output", async () => {
-  const context = testContext(globalArgs);
+  const context = testContext({ ...globalArgs, provider: "github" });
 
   const { calls } = await withMockedFetch(
     [jsonResponse({
@@ -267,7 +234,6 @@ Deno.test("authorize sends OAuth query fields and stores sensitive output", asyn
     () =>
       model.methods.authorize.execute(
         {
-          provider: "github",
           scopes: "repo,user",
           add_scopes: "workflow",
           redirect_uri: "https://client.example.test/oauth/callback",
@@ -288,11 +254,18 @@ Deno.test("authorize sends OAuth query fields and stores sensitive output", asyn
     "https://client.example.test/oauth/callback",
   );
   assertEquals(url.searchParams.get("state"), "client-state");
-  assertEquals(context.getWrittenResources()[0].specName, "authorization");
+  assertEquals(context.getWrittenResources()[0].specName, "pending");
 });
 
-Deno.test("callback sends code and policy without the provider path field", async () => {
-  const context = testContext(globalArgs);
+Deno.test("callback sends code and saved state and policy without the provider path field", async () => {
+  const context = testContext({ ...globalArgs, provider: "github" }, {
+    storedResources: {
+      pending: {
+        authorize_url: "https://example.com/authorize",
+        state: "server-state",
+      },
+    },
+  });
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -306,10 +279,8 @@ Deno.test("callback sends code and policy without the provider path field", asyn
     () =>
       model.methods.callback.execute(
         {
-          provider: "github",
           code: "oauth-code",
           redirect_uri: "https://client.example.test/oauth/callback",
-          state: "server-state",
           access_policy: policy,
         },
         context,
@@ -328,18 +299,115 @@ Deno.test("callback sends code and policy without the provider path field", asyn
   assertEquals(context.getWrittenResources()[0].specName, "connection");
 });
 
-Deno.test("invalid API output fails without writing a resource", async () => {
+Deno.test("connector binding methods refuse an already saved connection id", async () => {
+  for (
+    const name of [
+      "createApiKey",
+      "provision",
+      "authorize",
+      "callback",
+    ] as const
+  ) {
+    const context = testContext(globalArgs, {
+      storedResources: {
+        connection: connection(),
+        pending: { authorize_url: "https://example.com", state: "s" },
+      },
+    });
+    const { calls } = await withMockedFetch([], () =>
+      assertRejects(
+        () =>
+          model.methods[name].execute(
+            model.methods[name].arguments.parse({
+              api_key: "secret",
+              code: "secret",
+            }) as never,
+            context,
+          ),
+        Error,
+        "already saved",
+      ));
+    assertEquals(calls.length, 0);
+    assertEquals(context.getWrittenResources(), []);
+    assertEquals(context.getDeletedResources(), []);
+  }
+});
+Deno.test("connector non-binding methods require the saved connection identity", async () => {
+  for (const name of ["get", "updatePolicy", "delete"] as const) {
+    const context = testContext(globalArgs);
+    const { calls } = await withMockedFetch([], () =>
+      assertRejects(
+        () =>
+          model.methods[name].execute(
+            model.methods[name].arguments.parse({
+              access_policy: policy,
+            }) as never,
+            context,
+          ),
+        Error,
+        "No connection identity is saved",
+      ));
+    assertEquals(calls.length, 0);
+    assertEquals(context.getWrittenResources(), []);
+  }
+});
+Deno.test("connector lookup binds a connection with secrets excluded", async () => {
   const context = testContext(globalArgs);
-
-  const error = await assertRejects(
-    () =>
-      withMockedFetch(
-        [jsonResponse({ connections: [{ id: "incomplete" }] })],
-        () => model.methods.list.execute({}, context),
-      ),
-    Error,
+  const { calls } = await withMockedFetch([
+    jsonResponse({
+      connection: {
+        ...connection({ id: "connection/one" }),
+        api_key: "secret",
+        access_token: "secret",
+        refresh_token: "secret",
+      },
+    }),
+  ], () => model.methods.lookup.execute({ id: "connection/one" }, context));
+  assertEquals(
+    calls[0].url,
+    "https://api.sprites.dev/v1/oauth/connections/connection%2Fone",
   );
-
-  assertStringIncludes(error.message, "invalid JSON response");
-  assertEquals(context.getWrittenResources(), []);
+  assertEquals(
+    context.getWrittenResources()[0].data,
+    connection({ id: "connection/one" }),
+  );
+});
+Deno.test("connector callback requires pending authorization and clears it only on success", async () => {
+  const context = testContext(globalArgs);
+  await withMockedFetch(
+    [],
+    () =>
+      assertRejects(
+        () => model.methods.callback.execute({ code: "secret" }, context),
+        Error,
+        "No pending OAuth",
+      ),
+  );
+  for (const success of [false, true]) {
+    const pending = {
+      authorize_url: "https://example.com/authorize",
+      state: "saved-secret",
+    };
+    const test = testContext(globalArgs, { storedResources: { pending } });
+    let body: unknown;
+    await withMockedFetch(
+      async (req) => {
+        body = await req.json();
+        return success
+          ? jsonResponse({ connection: connection() })
+          : jsonResponse({ error: "failed" }, 500);
+      },
+      (): Promise<unknown> =>
+        success
+          ? model.methods.callback.execute({ code: "code" }, test)
+          : assertRejects(
+            () => model.methods.callback.execute({ code: "code" }, test),
+            Error,
+          ),
+    );
+    assertEquals(body, { code: "code", state: "saved-secret" });
+    assertEquals(test.getDeletedResources(), success ? ["pending"] : []);
+    assertEquals(test.getWrittenResources().length, success ? 1 : 0);
+  }
+  assertEquals(model.resources.pending.schema.meta()?.sensitive, true);
 });

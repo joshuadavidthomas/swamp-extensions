@@ -2,17 +2,16 @@
 /** Sprite service configuration, lifecycle, and logs. @module */
 import { z } from "zod";
 import {
+  type Context,
   Empty,
-  emptyRequest,
   Environment,
   jsonRequest,
   method,
   ndjson,
   requireComplete,
   resource,
-  segment,
 } from "./core.ts";
-import { type SpriteContext, spritePath, verifySprite } from "./sprite.ts";
+import { type SpriteContext, spritePath } from "./sprite.ts";
 
 const ServiceState = z.object({
   name: z.string(),
@@ -71,18 +70,15 @@ const ServiceEvent = z.discriminatedUnion("type", [
 const Services = z.object({
   services: z.array(Service),
 });
-const ServiceEvents = z.object({
+export const ServiceEvents = z.object({
   events: z.array(ServiceEvent),
   truncated: z.boolean().describe(
     "True for service log reads, which observe a bounded portion of logs; false for completed operation progress, including operations with a duration.",
   ),
 });
 
-function servicePath(ctx: SpriteContext, name: string, suffix = ""): string {
-  return spritePath(ctx, `/services/${segment(name)}${suffix}`);
-}
-async function serviceStream(
-  ctx: SpriteContext,
+export async function serviceStream(
+  ctx: Context,
   methodName: string,
   path: string,
   options: NonNullable<Parameters<typeof ndjson>[4]>,
@@ -110,16 +106,6 @@ async function serviceStream(
 
 export const servicesResources = {
   services: resource(Services, "Configured Sprite services"),
-  service: resource(Service, "One configured Sprite service"),
-  servicePut: resource(
-    ServiceEvents,
-    "Service create or update progress",
-    "7d",
-  ),
-  serviceLogs: resource(ServiceEvents, "Service log stream", "7d"),
-  serviceStarted: resource(ServiceEvents, "Service start progress", "7d"),
-  serviceStopped: resource(ServiceEvents, "Service stop progress", "7d"),
-  serviceRestarted: resource(ServiceEvents, "Service restart progress", "7d"),
 };
 
 export const servicesMethods = {
@@ -132,120 +118,9 @@ export const servicesMethods = {
       services: await jsonRequest(
         ctx,
         "GET",
-        spritePath(ctx, "/services"),
+        spritePath(ctx.globalArgs.name, "/services"),
         z.array(Service),
       ),
     }),
-  ),
-  putService: method(
-    "Create or update a Sprite service",
-    z.object({
-      service_name: z.string().min(1),
-      service: z.object({
-        cmd: z.string().min(1),
-        args: z.array(z.string()).default([]),
-        env: Environment.optional(),
-        dir: z.string().optional(),
-        needs: z.array(z.string()).default([]),
-        http_port: z.number().int().nullable().optional(),
-      }),
-      duration: z.string().min(1).optional(),
-    }),
-    "servicePut",
-    ServiceEvents,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await serviceStream(
-        ctx,
-        "PUT",
-        servicePath(ctx, args.service_name),
-        { query: { duration: args.duration }, json: args.service },
-        "startup",
-      );
-    },
-  ),
-  getServiceLogs: method(
-    "Read a Sprite service log stream",
-    z.object({
-      service_name: z.string().min(1),
-      lines: z.number().int().nonnegative().optional(),
-      duration: z.string().min(1).optional(),
-    }),
-    "serviceLogs",
-    ServiceEvents,
-    (args, ctx: SpriteContext) =>
-      serviceStream(
-        ctx,
-        "GET",
-        servicePath(ctx, args.service_name, "/logs"),
-        { query: { lines: args.lines, duration: args.duration } },
-        "logs",
-      ),
-  ),
-  startService: method(
-    "Start a Sprite service",
-    z.object({
-      service_name: z.string().min(1),
-      duration: z.string().min(1).optional(),
-    }),
-    "serviceStarted",
-    ServiceEvents,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await serviceStream(
-        ctx,
-        "POST",
-        servicePath(ctx, args.service_name, "/start"),
-        { query: { duration: args.duration } },
-        "startup",
-      );
-    },
-  ),
-  stopService: method(
-    "Stop a Sprite service",
-    z.object({
-      service_name: z.string().min(1),
-      timeout: z.string().min(1).optional(),
-    }),
-    "serviceStopped",
-    ServiceEvents,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await serviceStream(
-        ctx,
-        "POST",
-        servicePath(ctx, args.service_name, "/stop"),
-        { query: { timeout: args.timeout } },
-        "progress",
-      );
-    },
-  ),
-  restartService: method(
-    "Restart a Sprite service",
-    z.object({
-      service_name: z.string().min(1),
-      duration: z.string().min(1).optional(),
-    }),
-    "serviceRestarted",
-    ServiceEvents,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await serviceStream(
-        ctx,
-        "POST",
-        servicePath(ctx, args.service_name, "/restart"),
-        { query: { duration: args.duration } },
-        "startup",
-      );
-    },
-  ),
-  deleteService: method(
-    "Delete a Sprite service",
-    z.object({ service_name: z.string().min(1) }),
-    null,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      await emptyRequest(ctx, "DELETE", servicePath(ctx, args.service_name));
-    },
   ),
 };

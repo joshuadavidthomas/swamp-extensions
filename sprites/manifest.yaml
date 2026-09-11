@@ -1,10 +1,11 @@
 manifestVersion: 1
 name: "@josh/sprites"
-version: "2026.09.10.1"
+version: "2026.09.11.1"
 description: |
-  Swamp models for Fly.io Sprites: organization inventory, named Sprites, and
-  connectors. Sprite methods cover execution, files, services, checkpoints,
-  policies, and network access.
+  Swamp models for Fly.io Sprites: organizations, named Sprites, services,
+  checkpoints, task holds, and connectors. Sprite methods cover execution,
+  files, policies, and network access, and list the Sprite's services,
+  checkpoints, and tasks.
 
   The organization token determines the scope of each model. Sprite mutations
   require a saved identity and reject a replacement with the same name. Exec
@@ -14,9 +15,12 @@ description: |
 
   | Model type | Description |
   | --- | --- |
-  | `@josh/sprites/sprite` | Manage one named Sprite and its execution, files, services, checkpoints, policies, and networking. |
-  | `@josh/sprites/organization` | List organization inventory. |
-  | `@josh/sprites/connectors` | Create connectors and manage connector policies and OAuth. |
+  | `@josh/sprites/organization` | The token's Fly organization and its Sprite and connector lists. |
+  | `@josh/sprites/sprite` | One named Sprite: execution, files, policies, and networking. |
+  | `@josh/sprites/service` | One Sprite service: definition, lifecycle, logs, and signal. |
+  | `@josh/sprites/checkpoint` | One named slot holding a Sprite checkpoint. |
+  | `@josh/sprites/task` | One task hold on a Sprite. |
+  | `@josh/sprites/connector` | One organization connection: policy and OAuth. |
 
   ## Requirements
 
@@ -39,9 +43,12 @@ description: |
 repository: https://github.com/joshuadavidthomas/sprite-swamp
 
 models:
-  - sprite.ts
   - organization.ts
-  - connectors.ts
+  - sprite.ts
+  - service.ts
+  - checkpoint.ts
+  - task.ts
+  - connector.ts
 
 additionalFiles:
   - LICENSE

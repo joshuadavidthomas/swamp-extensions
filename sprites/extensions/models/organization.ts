@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Swamp model for reading a Fly.io Sprites organization inventory.
+ * The Fly organization the token belongs to.
  * The model keeps API credentials out of stored data and preserves API Sprite
  * fields for other models to read with CEL expressions.
  *
@@ -19,6 +19,8 @@ import {
   resource,
   ResponseLimitError,
 } from "./_lib/core.ts";
+
+import { connectorsMethods, connectorsResources } from "./_lib/connectors.ts";
 
 import { SpriteResponse } from "./_lib/sprite.ts";
 
@@ -128,25 +130,27 @@ async function listSpritesPage(
   }
 }
 
-/** Fly.io Sprites organization inventory model. */
+/** The Fly organization the token belongs to: its Sprites and its connections. */
 export const model = {
   type: "@josh/sprites/organization",
-  version: "2026.09.10.1",
+  version: "2026.09.11.1",
   // Inventory allows 30 seconds per page, including larger organization lists.
   globalArguments: AuthSchema.extend({
     timeoutMs: AuthSchema.shape.timeoutMs.default(30_000),
   }),
   resources: {
-    inventory: resource(
+    ...connectorsResources,
+    sprites: resource(
       InventorySchema,
       "Current Sprites and capacity limits for one organization",
     ),
   },
   methods: {
-    lookup: method(
+    ...connectorsMethods,
+    listSprites: method(
       "Read every Sprite visible to the organization token",
       LookupArgsSchema,
-      "inventory",
+      "sprites",
       InventorySchema,
       async (args, context: Context) => {
         const budget = { remaining: context.globalArgs.maxResponseBytes };

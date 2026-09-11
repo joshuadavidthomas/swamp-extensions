@@ -2,69 +2,32 @@
 /** The Sprite's local management API at /.sprite/api.sock, reached with curl through authenticated exec.
  * None of these routes appear in sprites.dev/api or docs.sprites.dev; they were verified live. @module */
 import { z } from "zod";
-import { deadline, method, resource, segment } from "./core.ts";
+import { type Context, deadline } from "./core.ts";
 import { executeHttp } from "./exec.ts";
-import { type SpriteContext, verifySprite } from "./sprite.ts";
-import { Service } from "./services.ts";
 
 /** Native exec boundary; credentials stay on the outer TLS connection. */
 export type ManagementExec = typeof executeHttp;
-const ManagementResourceName = z.string().min(1).max(256).refine(
-  (name) => name !== "." && name !== "..",
-  "A management resource name must not be a dot segment.",
-);
-const units: Record<string, number> = {
-  ns: 1e-9,
-  us: 1e-6,
-  "µs": 1e-6,
-  ms: 1e-3,
-  s: 1,
-  m: 60,
-  h: 3600,
-};
-/** Tasks accept seconds or Go-style durations, bounded to the provider's one-hour limit. */
-export const TaskExpiry = z.union([
-  z.number().int().positive().max(3600),
-  z.string().min(1).max(128).refine((text) => {
-    const parts = [...text.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g)];
-    const seconds = parts.reduce(
-      (sum, part) => sum + Number(part[1]) * units[part[2]],
-      0,
-    );
-    return parts.map((part) => part[0]).join("") === text && seconds > 0 &&
-      seconds <= 3600;
-  }, "Task expiration must be a positive duration of at most one hour."),
-]);
-const Task = z.object({
-  name: z.string(),
-  started_at: z.iso.datetime({ offset: true }),
-  expires_at: z.iso.datetime({ offset: true }),
-});
-const Tasks = z.object({ tasks: z.array(Task) });
-const TaskArgs = z.object({ name: ManagementResourceName, expire: TaskExpiry });
-
-type Request = {
+export type Request = {
   method: "GET" | "POST" | "PUT" | "DELETE";
   path: `/v1/services/${string}` | "/v1/tasks" | `/v1/tasks/${string}`;
   body?: {
     name?: string;
     signal?: string;
-    expire?: z.output<typeof TaskExpiry>;
+    expire?: string | number;
   };
   statuses: readonly number[];
 };
 
 /** One socket request, never retried or redirected; failures never expose remote output. */
-async function send(
-  ctx: SpriteContext,
+export async function send(
+  ctx: Context,
+  sprite: string,
   request: Request,
   execute: ManagementExec,
 ): Promise<string> {
   const operation = deadline(ctx);
   const bounded = { ...ctx, signal: operation.signal };
   try {
-    // Even local reads start a process. Require the saved identity for every exec.
-    await verifySprite(bounded);
     operation.check(
       "Sprite management request exceeded timeoutMs before exec.",
     );
@@ -72,37 +35,42 @@ async function send(
     const body = request.body === undefined
       ? new Uint8Array()
       : new TextEncoder().encode(JSON.stringify(request.body));
-    const result = await execute({
-      ...bounded,
-      globalArgs: { ...ctx.globalArgs, timeoutMs: remaining },
-    }, {
-      cmd: [
-        "/usr/bin/curl",
-        "--disable",
-        "--silent",
-        "--show-error",
-        "--fail-with-body",
-        "--unix-socket",
-        "/.sprite/api.sock",
-        "--noproxy",
-        "*",
-        "--proto",
-        "=http",
-        "--header",
-        "Content-Type: application/json",
-        "--max-time",
-        String(remaining / 1000),
-        "--max-filesize",
-        String(ctx.globalArgs.maxResponseBytes),
-        "--request",
-        request.method,
-        "--write-out",
-        "\n%{http_code}",
-        ...(request.body === undefined ? [] : ["--data-binary", "@-"]),
-        `http://sprite${request.path}`,
-      ],
-      stdin: request.body !== undefined,
-    }, body);
+    const result = await execute(
+      {
+        ...bounded,
+        globalArgs: { ...ctx.globalArgs, timeoutMs: remaining },
+      },
+      sprite,
+      {
+        cmd: [
+          "/usr/bin/curl",
+          "--disable",
+          "--silent",
+          "--show-error",
+          "--fail-with-body",
+          "--unix-socket",
+          "/.sprite/api.sock",
+          "--noproxy",
+          "*",
+          "--proto",
+          "=http",
+          "--header",
+          "Content-Type: application/json",
+          "--max-time",
+          String(remaining / 1000),
+          "--max-filesize",
+          String(ctx.globalArgs.maxResponseBytes),
+          "--request",
+          request.method,
+          "--write-out",
+          "\n%{http_code}",
+          ...(request.body === undefined ? [] : ["--data-binary", "@-"]),
+          `http://sprite${request.path}`,
+        ],
+        stdin: request.body !== undefined,
+      },
+      body,
+    );
     operation.check("Sprite management request exceeded timeoutMs.");
     if (result.exitCode !== 0 && result.exitCode !== 22) {
       throw new Error(
@@ -133,14 +101,16 @@ async function send(
   }
 }
 
-const read = async <S extends z.ZodType>(
-  ctx: SpriteContext,
+export const read = async <S extends z.ZodType>(
+  ctx: Context,
+  sprite: string,
   path: Request["path"],
   schema: S,
   execute: ManagementExec,
 ): Promise<z.output<S>> => {
   const body = await send(
     ctx,
+    sprite,
     { method: "GET", path, statuses: [200] },
     execute,
   );
@@ -156,115 +126,3 @@ const read = async <S extends z.ZodType>(
   }
   return parsed.data;
 };
-/** Build management methods with an explicit native exec boundary. */
-export function createManagementMethods(execute: ManagementExec = executeHttp) {
-  return {
-    getService: method(
-      "Read a configured Sprite service through the Sprite management socket",
-      z.object({ service_name: ManagementResourceName }),
-      "service",
-      Service,
-      (args, ctx: SpriteContext) =>
-        read(
-          ctx,
-          `/v1/services/${segment(args.service_name)}`,
-          Service,
-          execute,
-        ),
-    ),
-    signalService: method(
-      "Signal a service through the Sprite management socket",
-      z.object({
-        service_name: ManagementResourceName,
-        signal: z.string().min(1).max(32),
-      }),
-      null,
-      async (args, ctx: SpriteContext) => {
-        await send(ctx, {
-          method: "POST",
-          path: "/v1/services/signal",
-          body: { name: args.service_name, signal: args.signal },
-          statuses: [204],
-        }, execute);
-      },
-    ),
-    listTasks: method(
-      "List active task holds through the Sprite management socket",
-      z.object({}),
-      "tasks",
-      Tasks,
-      (_args, ctx: SpriteContext) => read(ctx, "/v1/tasks", Tasks, execute),
-    ),
-    getTask: method(
-      "Read an active task hold",
-      z.object({ name: ManagementResourceName }),
-      "task",
-      Task,
-      (args, ctx: SpriteContext) =>
-        read(ctx, `/v1/tasks/${segment(args.name)}`, Task, execute),
-    ),
-    createTask: method(
-      "Create a task hold; an existing name fails rather than being refreshed",
-      TaskArgs,
-      "taskCreated",
-      TaskArgs,
-      async (args, ctx: SpriteContext) => {
-        await send(ctx, {
-          method: "POST",
-          path: "/v1/tasks",
-          body: args,
-          statuses: [201],
-        }, execute);
-        return args;
-      },
-    ),
-    refreshTask: method(
-      "Refresh a named task hold, or create it if absent",
-      TaskArgs,
-      "taskRefreshed",
-      TaskArgs,
-      async (args, ctx: SpriteContext) => {
-        await send(ctx, {
-          method: "PUT",
-          path: `/v1/tasks/${segment(args.name)}`,
-          body: { expire: args.expire },
-          statuses: [200],
-        }, execute);
-        return args;
-      },
-    ),
-    deleteTask: method(
-      "Release a task hold; an already absent task succeeds",
-      z.object({ name: ManagementResourceName }),
-      null,
-      async (args, ctx: SpriteContext) => {
-        await send(ctx, {
-          method: "DELETE",
-          path: `/v1/tasks/${segment(args.name)}`,
-          statuses: [204, 404],
-        }, execute);
-      },
-    ),
-  };
-}
-/** Local API observations expire; stored task snapshots do not imply a continuing hold. */
-export const localApiResources = {
-  tasks: resource(
-    Tasks,
-    "Observed task holds; this snapshot does not keep a Sprite awake",
-    "7d",
-  ),
-  task: resource(
-    Task,
-    "Observed task expiry; refresh explicitly when needed",
-    "7d",
-  ),
-  taskCreated: resource(
-    TaskArgs,
-    "Accepted task creation, not a continually renewed hold",
-    "7d",
-  ),
-  taskRefreshed: resource(TaskArgs, "Accepted named task upsert", "7d"),
-};
-
-export const localApiMethods = createManagementMethods();

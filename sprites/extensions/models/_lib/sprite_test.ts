@@ -153,8 +153,8 @@ Deno.test("restart refuses missing and replaced identities before POST", async (
           Error,
         ),
     );
-    assertEquals(calls.length, 1);
-    assertEquals(calls[0].method, "GET");
+    assertEquals(calls.length, stored ? 1 : 0);
+    if (stored) assertEquals(calls[0].method, "GET");
   }
 });
 
@@ -210,8 +210,8 @@ Deno.test("probeUrl refuses missing and replaced identities before the URL reque
           Error,
         ),
     );
-    assertEquals(calls.length, 1);
-    assertEquals(calls[0].method, "GET");
+    assertEquals(calls.length, stored ? 1 : 0);
+    if (stored) assertEquals(calls[0].method, "GET");
   }
 });
 
@@ -356,11 +356,28 @@ Deno.test("create binds the global name and sends every supported option in prov
 });
 
 Deno.test("Sprite deletion treats a missing Sprite as already deleted", async () => {
-  const context = testContext(globalArgs);
+  const context = testContext(globalArgs, {
+    storedResources: { state: sprite },
+  });
   const { calls } = await withMockedFetch(
     [json({ error: "missing" }, 404)],
     () => runnable("delete").execute({}, context),
   );
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "GET");
+});
+
+Deno.test("Sprite create refuses an already bound instance without a request", async () => {
+  const test = testContext(globalArgs, { storedResources: { state: sprite } });
+  const { calls } = await withMockedFetch(
+    [],
+    () =>
+      assertRejects(
+        () => runnable("create").execute({}, test),
+        Error,
+        "already saved",
+      ),
+  );
+  assertEquals(calls.length, 0);
+  assertEquals(test.getWrittenResources(), []);
 });

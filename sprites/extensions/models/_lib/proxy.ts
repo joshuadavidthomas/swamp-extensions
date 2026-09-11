@@ -241,7 +241,7 @@ export async function connectExecProxy(
     };
     channel = await connect(
       { ...ctx, signal },
-      spritePath(ctx, "/exec"),
+      spritePath(ctx.globalArgs.name, "/exec"),
       query,
     );
     const queued: Buffer[] = [];
