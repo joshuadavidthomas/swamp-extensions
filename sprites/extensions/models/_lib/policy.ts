@@ -14,7 +14,7 @@ const NetworkRule = z.object({
     message: "A network rule cannot contain both domain and include.",
   },
 );
-const NetworkPolicy = z.object({ rules: z.array(NetworkRule) });
+export const NetworkPolicy = z.object({ rules: z.array(NetworkRule) });
 const PrivilegesPolicy = z.object({
   profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
   devices: z.array(z.string()).optional(),

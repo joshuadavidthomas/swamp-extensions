@@ -104,6 +104,10 @@ Reference stored results in model definitions with CEL, for example
   snapshots do not renew holds; refresh or release tasks explicitly.
 - Connector policy updates replace the whole policy. Provisioning alone does not
   grant Sprite access; an empty policy denies access.
+- Organization `setNetworkPolicy` matches Sprites by prefix or labels at call
+  time and applies the policy one Sprite at a time. It records failures per
+  Sprite instead of stopping and does not check any Sprite instance's saved
+  identity.
 
 ## Development
 

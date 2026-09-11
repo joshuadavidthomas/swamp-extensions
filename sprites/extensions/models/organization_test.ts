@@ -477,3 +477,239 @@ Deno.test("invalid API output fails without writing a resource", async () => {
   assertStringIncludes(error.message, "invalid JSON response");
   assertEquals(context.getWrittenResources(), []);
 });
+
+const networkPolicy = {
+  rules: [{ domain: "example.com", action: "allow" as const }],
+};
+
+function rolloutSprite(index: number, labels?: string[]) {
+  return {
+    id: `sprite-${index}`,
+    name: `worker-${index}`,
+    organization: "acme",
+    status: "cold",
+    created_at: "2026-09-08T10:00:00Z",
+    updated_at: "2026-09-09T10:00:00Z",
+    url: `https://worker-${index}.example.com`,
+    labels,
+  };
+}
+
+Deno.test("setNetworkPolicy selects by API prefix across pages and applies in listing order", async () => {
+  const context = testContext(globalArgs);
+  const bodies: unknown[] = [];
+  const { result, calls } = await withMockedFetch(
+    async (request) => {
+      if (request.method === "POST") {
+        bodies.push(await request.json());
+        return new Response(null, { status: 204 });
+      }
+      const second = new URL(request.url).searchParams.has(
+        "continuation_token",
+      );
+      return response({
+        ...emptyPageBase,
+        sprites: [rolloutSprite(second ? 2 : 1)],
+        has_more: !second,
+        next_continuation_token: second ? null : "next",
+      });
+    },
+    () =>
+      model.methods.setNetworkPolicy.execute({
+        select: { prefix: "worker-" },
+        policy: networkPolicy,
+      }, context),
+  );
+  assertEquals(calls.map((call) => call.method), [
+    "GET",
+    "GET",
+    "POST",
+    "POST",
+  ]);
+  for (const call of calls.slice(0, 2)) {
+    assertEquals(new URL(call.url).searchParams.get("prefix"), "worker-");
+  }
+  assertEquals(calls.slice(2).map((call) => new URL(call.url).pathname), [
+    "/v1/sprites/worker-1/policy/network",
+    "/v1/sprites/worker-2/policy/network",
+  ]);
+  assertEquals(bodies, [networkPolicy, networkPolicy]);
+  assertEquals(result.dataHandles[0].name, "networkPolicyRollout");
+  const writes = context.getWrittenResources();
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].specName, "networkPolicyRollout");
+  assertEquals(writes[0].data, {
+    select: { prefix: "worker-" },
+    policy: networkPolicy,
+    matched: 2,
+    applied: 2,
+    failed: 0,
+    results: [1, 2].map((index) => ({
+      name: `worker-${index}`,
+      id: `sprite-${index}`,
+      status: "applied",
+    })),
+    observedAt: writes[0].data.observedAt,
+  });
+  assertEquals(typeof writes[0].data.observedAt, "string");
+});
+
+Deno.test("setNetworkPolicy requires every selected label", async () => {
+  const context = testContext(globalArgs);
+  const { calls } = await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [
+          rolloutSprite(1, ["ci", "prod"]),
+          rolloutSprite(2, ["ci"]),
+          rolloutSprite(3),
+          rolloutSprite(4, ["prod", "ci", "extra"]),
+        ],
+      }),
+      new Response(null, { status: 204 }),
+      new Response(null, { status: 204 }),
+    ],
+    () =>
+      model.methods.setNetworkPolicy.execute({
+        select: { labels: ["ci", "prod"] },
+        policy: networkPolicy,
+      }, context),
+  );
+  assertEquals(calls.map((call) => new URL(call.url).pathname), [
+    "/v1/sprites",
+    "/v1/sprites/worker-1/policy/network",
+    "/v1/sprites/worker-4/policy/network",
+  ]);
+  const rollout = context.getWrittenResources()[0].data;
+  assertEquals(rollout.matched, 2);
+  assertEquals(rollout.select, { labels: ["ci", "prod"] });
+});
+
+Deno.test("setNetworkPolicy all omits prefix and records a failure without retrying or stopping", async () => {
+  const context = testContext(globalArgs);
+  const { calls } = await withMockedFetch(
+    [
+      response({
+        ...emptyPageBase,
+        sprites: [1, 2, 3].map((index) => rolloutSprite(index)),
+      }),
+      new Response(null, { status: 204 }),
+      response({ error: "private provider output" }, 500),
+      new Response(null, { status: 204 }),
+    ],
+    () =>
+      model.methods.setNetworkPolicy.execute({
+        select: { all: true },
+        policy: networkPolicy,
+      }, context),
+  );
+  assertEquals(new URL(calls[0].url).searchParams.has("prefix"), false);
+  assertEquals(calls.map((call) => call.method), [
+    "GET",
+    "POST",
+    "POST",
+    "POST",
+  ]);
+  assertEquals(
+    calls.slice(1).map((call) => new URL(call.url).pathname),
+    [1, 2, 3].map((index) => `/v1/sprites/worker-${index}/policy/network`),
+  );
+  const rollout = context.getWrittenResources()[0].data;
+  assertEquals(rollout.matched, 3);
+  assertEquals(rollout.applied, 2);
+  assertEquals(rollout.failed, 1);
+  assertEquals(rollout.results, [
+    { name: "worker-1", id: "sprite-1", status: "applied" },
+    { name: "worker-2", id: "sprite-2", status: "failed", error: "HTTP 500" },
+    { name: "worker-3", id: "sprite-3", status: "applied" },
+  ]);
+});
+
+Deno.test("setNetworkPolicy hides unsanitized response-body cancellation errors", async () => {
+  const context = testContext(globalArgs);
+  await withMockedFetch(
+    (request) =>
+      request.method === "GET"
+        ? response({ ...emptyPageBase, sprites: [rolloutSprite(1)] })
+        : new Response(
+          new ReadableStream({
+            cancel() {
+              throw new Error("private provider output");
+            },
+          }),
+        ),
+    () =>
+      model.methods.setNetworkPolicy.execute({
+        select: { all: true },
+        policy: networkPolicy,
+      }, context),
+  );
+  assertEquals(context.getWrittenResources()[0].data.results, [
+    {
+      name: "worker-1",
+      id: "sprite-1",
+      status: "failed",
+      error: "request failed",
+    },
+  ]);
+});
+
+Deno.test("setNetworkPolicy parent cancellation mid-rollout rejects without writing", async () => {
+  const controller = new AbortController();
+  const context = testContext(globalArgs, { signal: controller.signal });
+  let posts = 0;
+  const { calls } = await withMockedFetch(
+    (request) => {
+      if (request.method === "GET") {
+        return response({
+          ...emptyPageBase,
+          sprites: [1, 2, 3].map((index) => rolloutSprite(index)),
+        });
+      }
+      if (++posts === 2) {
+        controller.abort(new DOMException("cancelled", "AbortError"));
+        throw request.signal.reason;
+      }
+      return new Response(null, { status: 204 });
+    },
+    () =>
+      assertRejects(
+        () =>
+          model.methods.setNetworkPolicy.execute({
+            select: { all: true },
+            policy: networkPolicy,
+          }, context),
+        DOMException,
+        "cancelled",
+      ),
+  );
+  assertEquals(calls.map((call) => call.method), ["GET", "POST", "POST"]);
+  assertEquals(context.getWrittenResources(), []);
+});
+
+Deno.test("setNetworkPolicy selector rejects missing and conflicting selections", () => {
+  const schema = model.methods.setNetworkPolicy.arguments;
+  for (
+    const select of [
+      {},
+      { all: true, prefix: "worker-" },
+      { all: true, labels: ["ci"] },
+      { prefix: "" },
+      { labels: [] },
+      { labels: [""] },
+    ]
+  ) {
+    assertEquals(
+      schema.safeParse({ select, policy: networkPolicy }).success,
+      false,
+    );
+  }
+  assertEquals(
+    schema.safeParse({
+      select: { prefix: "worker-", labels: ["ci"] },
+      policy: networkPolicy,
+    }).success,
+    true,
+  );
+});
