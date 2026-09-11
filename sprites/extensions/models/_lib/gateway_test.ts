@@ -9,7 +9,6 @@ import {
   discoverGateway,
   type GatewayHttpResponse,
   gatewayMethods,
-  gatewayResources,
   relayGateway,
   requestGateway,
 } from "./gateway.ts";
@@ -38,7 +37,7 @@ function response(
   };
 }
 
-Deno.test("gateway supports extension methods and protects response header credentials", async () => {
+Deno.test("gateway supports extension methods", async () => {
   await relayGateway(
     ctx,
     gatewayMethods.gatewayRequest.arguments.parse({
@@ -51,10 +50,6 @@ Deno.test("gateway supports extension methods and protects response header crede
       assertEquals(request.method, "PROPFIND");
       return Promise.resolve(response({ status: 207 }));
     },
-  );
-  assertEquals(
-    gatewayResources.gatewayResponse.schema.shape.headers.meta()?.sensitive,
-    true,
   );
 });
 

@@ -177,10 +177,10 @@ async function listSpritesPage(
 
   const retryableStatuses = new Set([429, 502, 503, 504]);
   const maxAttempts = 3;
-  let response: Response | undefined;
+  let response: Response;
   let body = "";
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  for (let attempt = 1;; attempt += 1) {
     try {
       response = await fetch(url, {
         headers: {
@@ -209,7 +209,10 @@ async function listSpritesPage(
       continue;
     }
 
-    if (response.ok || !retryableStatuses.has(response.status)) {
+    if (
+      response.ok || !retryableStatuses.has(response.status) ||
+      attempt === maxAttempts
+    ) {
       break;
     }
     if (attempt < maxAttempts) {
@@ -223,9 +226,6 @@ async function listSpritesPage(
     }
   }
 
-  if (!response) {
-    throw new Error("Sprites API request ended without a response");
-  }
   if (!response.ok) {
     throw new Error(`Sprites API returned HTTP ${response.status}`);
   }

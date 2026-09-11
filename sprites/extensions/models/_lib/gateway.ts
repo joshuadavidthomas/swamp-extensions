@@ -9,12 +9,13 @@ import { z } from "zod";
 import {
   BinaryFile,
   concatenate,
+  Input,
+  inputBytes,
   method,
   resource,
   segment,
   withHandles,
 } from "./core.ts";
-import { Input, inputBytes } from "./exec.ts";
 import { type SpriteContext, verifySprite } from "./sprite-api.ts";
 import { connectExecProxy } from "./proxy.ts";
 

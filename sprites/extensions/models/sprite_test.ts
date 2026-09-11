@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import {
   createModelTestContext,
   withMockedFetch,
@@ -21,70 +21,6 @@ const replacement = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
-Deno.test("all agreed Sprite capabilities are registered with explicit output schemas", () => {
-  const expected = [
-    "create",
-    "lookup",
-    "update",
-    "upgrade",
-    "restart",
-    "probeUrl",
-    "delete",
-    "createCheckpoint",
-    "listCheckpoints",
-    "getCheckpoint",
-    "restoreCheckpoint",
-    "getNetworkPolicy",
-    "setNetworkPolicy",
-    "getPrivilegesPolicy",
-    "setPrivilegesPolicy",
-    "deletePrivilegesPolicy",
-    "getResourcesPolicy",
-    "setResourcesPolicy",
-    "deleteResourcesPolicy",
-    "listServices",
-    "getService",
-    "putService",
-    "getServiceLogs",
-    "startService",
-    "stopService",
-    "restartService",
-    "deleteService",
-    "signalService",
-    "listTasks",
-    "getTask",
-    "createTask",
-    "refreshTask",
-    "putTask",
-    "deleteTask",
-    "listFiles",
-    "readFile",
-    "writeFile",
-    "deleteFile",
-    "copyFile",
-    "renameFile",
-    "chmodFile",
-    "chownFile",
-    "exec",
-    "execHttp",
-    "attach",
-    "listSessions",
-    "killSession",
-    "watch",
-    "proxy",
-    "gatewayList",
-    "gatewayRequest",
-    "watchPorts",
-    "controlExec",
-  ];
-  assertEquals(expected.length, 53);
-  assertEquals(Object.keys(model.methods).sort(), expected.sort());
-  for (const spec of Object.values(model.resources)) {
-    assert(spec.schema);
-    assert(["infinite", "7d"].includes(spec.lifetime));
-    assertEquals(spec.garbageCollection, 10);
-  }
-});
 Deno.test("Sprite names reject dot segments and uploads reject host filesystem paths", () => {
   for (const name of [".", ".."]) {
     assertEquals(

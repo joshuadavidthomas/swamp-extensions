@@ -102,6 +102,12 @@ async function stopOwned(channel: Channel, exited: boolean): Promise<void> {
   await channel.close();
 }
 
+class RelayCleanupError extends Error {
+  constructor() {
+    super("Sprite exec TCP relay cleanup failed.");
+  }
+}
+
 class ExecProxyDuplex extends Duplex {
   #reading = false;
   #finished = false;
@@ -215,7 +221,7 @@ class ExecProxyDuplex extends Duplex {
     this.#finished = true;
     this.#cleanup().then(
       () => callback(error),
-      () => callback(error ?? failure("cleanup failed.")),
+      () => callback(new RelayCleanupError()),
     );
   }
 }
@@ -409,6 +415,7 @@ async function runConnection(
   socket.once("end", onSocketEnd);
   socket.read(0);
 
+  let primaryFailed = false;
   try {
     let onTunnelData: ((chunk: Buffer) => void) | undefined;
     let onTunnelEnd: (() => void) | undefined;
@@ -459,17 +466,21 @@ async function runConnection(
       tunnel.on("data", onTunnelData);
       tunnel.once("end", onTunnelEnd);
       tunnel.once("close", onTunnelClose);
-      tunnel.once("error", onTunnelError);
+      tunnel.on("error", onTunnelError);
       socket.on("data", onSocketData);
       if (socketClosed) return { bytesFromClients, bytesFromRemote };
       socket.pipe(tunnel).pipe(socket);
       socket.resume();
       const result = await connectionDone;
       if (result.kind === "error") {
+        if (result.error instanceof RelayCleanupError) throw result.error;
         throw new Error("A loopback TCP proxy connection failed.", {
           cause: result.error,
         });
       }
+    } catch (error) {
+      primaryFailed = true;
+      throw error;
     } finally {
       socket.off("error", onSocketError);
       socket.off("close", onSocketClose);
@@ -486,10 +497,33 @@ async function runConnection(
         }
       }
       socket.destroy();
-      tunnel?.destroy();
+      if (tunnel) {
+        const ownedTunnel = tunnel;
+        const closed = new Promise<void>((resolve, reject) => {
+          if (ownedTunnel.closed) {
+            if (ownedTunnel.errored) reject(ownedTunnel.errored);
+            else resolve();
+            return;
+          }
+          const onError = (error: Error): void => reject(error);
+          ownedTunnel.on("error", onError);
+          ownedTunnel.once("close", () => {
+            ownedTunnel.off("error", onError);
+            resolve();
+          });
+        });
+        ownedTunnel.destroy();
+        await closed.catch((error: unknown) => {
+          if (!primaryFailed) throw error;
+          // Preserve the primary connection error over a cleanup failure.
+        });
+      }
     }
   } catch (error) {
-    if (!(durationEnded() && phase === "established")) throw error;
+    if (
+      error instanceof RelayCleanupError ||
+      !(durationEnded() && phase === "established")
+    ) throw error;
   }
   return { bytesFromClients, bytesFromRemote };
 }

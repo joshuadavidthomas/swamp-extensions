@@ -2,6 +2,24 @@
 /** Shared HTTP, output, and method boundaries for the Sprites API. @module */
 import { z } from "zod";
 
+/** Binary input accepts text or base64; it never reads paths on the Swamp host. */
+export const Input = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("text"), text: z.string() }),
+  z.object({ kind: z.literal("base64"), base64: z.base64() }),
+]);
+/** Resolve input bytes without text conversion of binary artifacts. */
+export function inputBytes(
+  input: z.output<typeof Input> | undefined,
+): Promise<Uint8Array> {
+  return Promise.resolve(
+    !input
+      ? new Uint8Array()
+      : input.kind === "text"
+      ? new TextEncoder().encode(input.text)
+      : Uint8Array.fromBase64(input.base64),
+  );
+}
+
 /** Credentials and transport limits shared by organization-scoped models. */
 export const AuthSchema = z.object({
   token: z.string().min(1).regex(
@@ -326,8 +344,6 @@ export function deadline(ctx: Pick<Context, "signal" | "globalArgs">): {
     },
   };
 }
-/** Positive acknowledgement for bodyless operations. */
-export const Acknowledgement = z.object({ completed: z.literal(true) });
 /** Decode complete NDJSON streams, including errors carried in a successful HTTP response. */
 export async function ndjson<S extends z.ZodType>(
   ctx: Pick<Context, "globalArgs" | "signal">,

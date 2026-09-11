@@ -659,3 +659,64 @@ for (const finish of ["duration", "cancel", "failure"] as const) {
       }
     }));
 }
+
+for (const rejectClose of [false, true]) {
+  Deno.test(`proxy waits for deferred tunnel close (reject=${rejectClose})`, () =>
+    verified(async () => {
+      const closing = Promise.withResolvers<void>();
+      const closeStarted = Promise.withResolvers<void>();
+      const channel = new FakeChannel(
+        [
+          binary(2, [...encoder.encode("connected\n")]),
+        ],
+        1000,
+        () => {
+          closeStarted.resolve();
+          return closing.promise;
+        },
+      );
+      const socket = new PassThrough();
+      let accept: (socket: net.Socket) => void = () => {};
+      const server = fakeServer((_options, callback) => {
+        callback();
+        accept(socket as unknown as net.Socket);
+      });
+      let settled = false;
+      const pending = runProxy(context(), {
+        localPort: 41000,
+        host: "db.example.net",
+        port: 5432,
+        durationMs: 2,
+      }, {
+        connect: () => Promise.resolve(channel),
+        createServer: ((_options: unknown, onConnection: typeof accept) => {
+          accept = onConnection;
+          return server;
+        }) as unknown as typeof net.createServer,
+      });
+      void pending.then(() => {
+        settled = true;
+      }, () => {
+        settled = true;
+      });
+      try {
+        await closeStarted.promise;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assertEquals(settled, false);
+        assertEquals(socket.destroyed, true);
+        if (rejectClose) {
+          closing.reject(new Error("deferred close failed"));
+          await assertRejects(() => pending, Error, "connection failed");
+        } else {
+          closing.resolve();
+          const output = await pending;
+          assertEquals(output.acceptedConnections, 1);
+          assertEquals(output.completedConnections, 1);
+          assertEquals(output.closed, true);
+        }
+      } finally {
+        closing.resolve();
+        await pending.catch(() => {});
+      }
+    }));
+}

@@ -5,11 +5,12 @@ import {
   BinaryFile,
   concatenate,
   deadline,
+  inputBytes,
   method,
   resource,
   withHandles,
 } from "./core.ts";
-import { ExecArgs, inputBytes } from "./exec.ts";
+import { ExecArgs } from "./exec.ts";
 import { type Channel, type ConnectChannel, openChannel } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
 import { decodeStreamFrame } from "./exec-http.ts";

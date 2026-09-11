@@ -12,6 +12,7 @@ export class FakeChannel implements Channel {
   constructor(
     messages: Array<Message | null | Error>,
     private readonly code = 1000,
+    private readonly onClose?: () => Promise<void>,
   ) {
     this.#messages = [...messages];
   }
@@ -39,7 +40,7 @@ export class FakeChannel implements Channel {
       this.closed = true;
       this.#messages.length = 0;
       for (const waiter of this.#waiters.splice(0)) waiter(null);
-      this.#closing = Promise.resolve();
+      this.#closing = this.onClose?.() ?? Promise.resolve();
     }
     return this.#closing;
   }

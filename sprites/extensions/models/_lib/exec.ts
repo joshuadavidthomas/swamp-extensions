@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   BinaryFile,
   concatenate,
+  Input,
+  inputBytes,
   jsonRequest,
   method,
   ndjson,
@@ -20,23 +22,6 @@ import { type ConnectChannel, openChannel } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
 import { initializeTerminal, TerminalDimension } from "./terminal.ts";
 
-/** Binary input accepts text or base64; it never reads paths on the Swamp host. */
-export const Input = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("text"), text: z.string() }),
-  z.object({ kind: z.literal("base64"), base64: z.base64() }),
-]);
-/** Resolve input bytes without text conversion of binary artifacts. */
-export function inputBytes(
-  input: z.output<typeof Input> | undefined,
-): Promise<Uint8Array> {
-  return Promise.resolve(
-    !input
-      ? new Uint8Array()
-      : input.kind === "text"
-      ? new TextEncoder().encode(input.text)
-      : Uint8Array.fromBase64(input.base64),
-  );
-}
 const CommandArgs = z.object({
   cmd: z.array(z.string()).min(1).describe(
     "Program and argv, encoded as repeated cmd parameters.",

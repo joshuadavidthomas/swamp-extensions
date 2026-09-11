@@ -7,6 +7,8 @@ import {
   BinaryFile,
   deadline,
   emptyRequest,
+  Input,
+  inputBytes,
   jsonRequest,
   method,
   ndjson,
@@ -236,10 +238,6 @@ const CommonMutation = z.object({
   recursive: z.boolean().default(false),
   asRoot: z.boolean().default(false),
 });
-const FileContent = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("text"), text: z.string() }),
-  z.object({ kind: z.literal("base64"), base64: z.base64() }),
-]);
 
 function checkpointPath(ctx: SpriteContext, id: string): string {
   return spritePath(ctx, `/checkpoints/${segment(id)}`);
@@ -296,13 +294,6 @@ async function serviceStream(
     events: requireComplete(events, path),
     truncated: path.endsWith("/logs"),
   };
-}
-function contentBytes(
-  content: z.output<typeof FileContent>,
-): Uint8Array {
-  return content.kind === "text"
-    ? new TextEncoder().encode(content.text)
-    : Uint8Array.fromBase64(content.base64);
 }
 /** JSON resources emitted by REST methods. Provider field names remain unchanged. */
 export const restResources = {
@@ -780,7 +771,7 @@ export const restMethods = {
   writeFile: method(
     "Write raw bytes to a Sprite file",
     WorkingPath.extend({
-      content: FileContent.meta({ sensitive: true }),
+      content: Input.meta({ sensitive: true }),
       mode: z.string().regex(/^[0-7]{3,4}$/).optional(),
       // The live OpenAPI calls this query parameter mkdir; older SDKs used mkdirParents.
       mkdir: z.boolean().optional(),
@@ -789,7 +780,7 @@ export const restMethods = {
     FsWrite,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const bytes = contentBytes(args.content);
+      const bytes = await inputBytes(args.content);
       return await jsonRequest(ctx, "PUT", fsPath(ctx, "write"), FsWrite, {
         query: {
           path: args.path,
