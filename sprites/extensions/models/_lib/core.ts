@@ -10,14 +10,12 @@ export const Input = z.discriminatedUnion("kind", [
 /** Resolve input bytes without text conversion of binary artifacts. */
 export function inputBytes(
   input: z.output<typeof Input> | undefined,
-): Promise<Uint8Array> {
-  return Promise.resolve(
-    !input
-      ? new Uint8Array()
-      : input.kind === "text"
-      ? new TextEncoder().encode(input.text)
-      : Uint8Array.fromBase64(input.base64),
-  );
+): Uint8Array<ArrayBuffer> {
+  return !input
+    ? new Uint8Array()
+    : input.kind === "text"
+    ? new TextEncoder().encode(input.text)
+    : Uint8Array.fromBase64(input.base64);
 }
 
 /** Credentials and transport limits shared by organization-scoped models. */
@@ -28,10 +26,8 @@ export const AuthSchema = z.object({
   ).meta({ sensitive: true }).describe(
     "Organization token; use a vault reference.",
   ),
-  baseUrl: z.url().refine(
-    (value) => new URL(value).protocol === "https:",
-    "Use an HTTPS API endpoint.",
-  ).default("https://api.sprites.dev"),
+  baseUrl: z.url({ protocol: /^https$/, error: "Use an HTTPS API endpoint." })
+    .default("https://api.sprites.dev"),
   timeoutMs: z.number().int().min(1).max(2_147_483_647).default(300_000),
   maxResponseBytes: z.number().int().min(1).max(1_073_741_824).default(
     67_108_864,
@@ -107,7 +103,7 @@ export async function request(
   options: {
     query?: Query;
     json?: unknown;
-    bytes?: Uint8Array;
+    bytes?: Uint8Array<ArrayBuffer>;
     headers?: Record<string, string>;
   } = {},
 ): Promise<Response> {
@@ -124,9 +120,7 @@ export async function request(
       redirect: "error",
       body: options.json !== undefined
         ? JSON.stringify(options.json)
-        : options.bytes === undefined
-        ? undefined
-        : new Uint8Array(options.bytes),
+        : options.bytes,
       signal: AbortSignal.any([
         ctx.signal,
         AbortSignal.timeout(ctx.globalArgs.timeoutMs),
@@ -152,6 +146,8 @@ export async function request(
 
 /** A response size violation is permanent and must not be retried. */
 export class ResponseLimitError extends Error {}
+/** Invalid response bodies are permanent and must not be retried. */
+export class InvalidResponseError extends Error {}
 /** Consume a response with a byte limit; exceeding the limit fails rather than truncating data. */
 export async function responseBytes(
   response: Response,
@@ -201,16 +197,18 @@ export async function jsonRequest<S extends z.ZodType>(
       new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     );
   } catch {
-    throw new Error(
+    throw new InvalidResponseError(
       `Sprites ${method} ${path} returned an invalid JSON response.`,
     );
   }
   const parsed = schema.safeParse(decoded);
   if (!parsed.success) {
     const issues = parsed.error.issues.slice(0, 8).map((issue) => {
-      const field = issue.path.map(String).join(".")
-        .replaceAll(ctx.globalArgs.token, "[redacted]")
-        .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").slice(0, 200);
+      const field = sanitize(
+        issue.path.map(String).join("."),
+        ctx.globalArgs.token,
+        200,
+      );
       return `${field || "response"}: ${issue.code}`;
     }).join("; ");
     const rootType = decoded === null
@@ -218,7 +216,7 @@ export async function jsonRequest<S extends z.ZodType>(
       : Array.isArray(decoded)
       ? "array"
       : typeof decoded;
-    throw new Error(
+    throw new InvalidResponseError(
       `Sprites ${method} ${path} returned an invalid JSON response for its schema (root ${rootType}; ${issues}).`,
     );
   }
@@ -283,7 +281,6 @@ export function method<
 export function method<A extends z.ZodType, G extends Auth = Auth>(
   description: string,
   args: A,
-  spec: string,
   output: null,
   run: (
     args: z.output<A>,
@@ -301,13 +298,24 @@ export function method<
 >(
   description: string,
   args: A,
-  spec: string,
-  output: O | null,
-  run: (
-    args: z.output<A>,
-    ctx: Context<G>,
-  ) => Promise<z.input<O> | void | WithHandles<z.input<O> | void>>,
+  ...definition:
+    | [
+      output: null,
+      run: (
+        args: z.output<A>,
+        ctx: Context<G>,
+      ) => Promise<void | WithHandles<void>>,
+    ]
+    | [
+      spec: string,
+      output: O,
+      run: (
+        args: z.output<A>,
+        ctx: Context<G>,
+      ) => Promise<z.input<O> | WithHandles<z.input<O>>>,
+    ]
 ) {
+  const run = definition.length === 2 ? definition[1] : definition[2];
   return {
     description,
     arguments: args,
@@ -319,7 +327,8 @@ export function method<
       const data = wrapped ? result.data : result;
       const dataHandles = wrapped ? [...result.handles] : [];
       ctx.signal.throwIfAborted();
-      if (output !== null) {
+      if (definition.length === 3) {
+        const [spec, output] = definition;
         const resourceHandle = await ctx.writeResource(
           spec,
           spec,
@@ -408,4 +417,26 @@ export function concatenate(chunks: Uint8Array[]): Uint8Array {
     offset += chunk.length;
   }
   return result;
+}
+
+export function decodeFrame<S extends z.ZodType>(
+  bytes: Uint8Array,
+  schema: S,
+  error: string,
+): z.output<S> {
+  try {
+    return schema.parse(
+      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+    );
+  } catch {
+    throw new Error(error);
+  }
+}
+
+/** Redact credentials and flatten unsafe characters in bounded diagnostics. */
+export function sanitize(text: string, token: string, limit: number): string {
+  return text.replaceAll(token, "[redacted]").replace(
+    /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu,
+    " ",
+  ).slice(0, limit);
 }

@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import {
-  createModelTestContext as createBaseModelTestContext,
-  withMockedFetch,
-} from "@swamp-club/swamp-testing";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
+import { testContext } from "./_lib/test_support.ts";
 import { model } from "./connectors.ts";
 
 const globalArgs = {
@@ -21,19 +19,6 @@ const policy = {
   allowed_endpoints: ["/chat.postMessage", "/chat.*"],
   blocked_endpoints: ["/chat.delete"],
 };
-
-function createModelTestContext(
-  options: Parameters<typeof createBaseModelTestContext>[0],
-) {
-  const result = createBaseModelTestContext(options);
-  return {
-    ...result,
-    context: {
-      ...result.context,
-      deleteResource: async (_name: string): Promise<void> => {},
-    },
-  };
-}
 
 const connectionBase = {
   id: "connection-1",
@@ -53,31 +38,27 @@ const connectionBase = {
   updated_at: "2026-09-09T11:00:00Z",
   usage_snippet: "fetch('/v1/gateway/slack/connection-1/...')",
 };
-type Connection = typeof connectionBase;
 
-function connection(overrides: Partial<Connection> = {}) {
+function connection(overrides: Partial<typeof connectionBase> = {}) {
   return { ...connectionBase, ...overrides };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
   });
 }
 
 Deno.test("list routes provider filtering and retains open provider_info metadata", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "list",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const { result, calls } = await withMockedFetch(
     [jsonResponse({ connections: [connection()] })],
     () =>
       model.methods.list.execute(
         { provider: "slack" },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
@@ -94,31 +75,25 @@ Deno.test("list routes provider filtering and retains open provider_info metadat
   const writes = getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "connections");
-  assertEquals(writes[0].name, "connections");
   assertEquals(writes[0].data, {
     connections: [connection()],
   });
 });
 
 Deno.test("list omits the optional provider query field", async () => {
-  const { context } = createModelTestContext({
-    globalArgs,
-    methodName: "list",
-  });
+  const context = testContext(globalArgs);
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ connections: [] })],
-    () => model.methods.list.execute({}, { ...context, globalArgs }),
+    () => model.methods.list.execute({}, context),
   );
 
   assertEquals(new URL(calls[0].url).search, "");
 });
 
 Deno.test("createApiKey sends snake_case credential and policy fields once", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "createApiKey",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -138,7 +113,7 @@ Deno.test("createApiKey sends snake_case credential and policy fields once", asy
           api_key: "provider-secret",
           access_policy: policy,
         },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
@@ -155,10 +130,8 @@ Deno.test("createApiKey sends snake_case credential and policy fields once", asy
 });
 
 Deno.test("provision sends only the provider and stores its connection", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "provision",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -176,7 +149,7 @@ Deno.test("provision sends only the provider and stores its connection", async (
     () =>
       model.methods.provision.execute(
         { provider: "openrouter" },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
@@ -200,17 +173,15 @@ Deno.test("provision sends only the provider and stores its connection", async (
 });
 
 Deno.test("get encodes the organization-scoped connector id", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "get",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ connection: connection({ id: "connection/one" }) })],
     () =>
       model.methods.get.execute(
         { id: "connection/one" },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
@@ -222,152 +193,76 @@ Deno.test("get encodes the organization-scoped connector id", async () => {
   });
 });
 
-for (
-  const [methodName, verb] of [
-    ["patchPolicy", "PATCH"],
-    ["updatePolicy", "PUT"],
-  ] as const
-) {
-  Deno.test(`${methodName} sends the same complete replacement policy`, async () => {
-    const { context, getWrittenResources } = createModelTestContext({
-      globalArgs,
-      methodName,
-    });
-    let requestBody: unknown;
+Deno.test("updatePolicy sends the complete replacement policy", async () => {
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
+  let requestBody: unknown;
 
-    const { calls } = await withMockedFetch(
-      async (request) => {
-        requestBody = await request.json();
-        return jsonResponse({ connection: connection() });
-      },
-      () =>
-        model.methods[methodName].execute(
-          { id: "connection-1", access_policy: policy },
-          { ...context, globalArgs },
-        ),
-    );
-
-    assertEquals(calls.length, 1);
-    assertEquals(calls[0].method, verb);
-    assertEquals(
-      new URL(calls[0].url).pathname,
-      "/v1/oauth/connections/connection-1",
-    );
-    assertEquals(requestBody, { access_policy: policy });
-    assertEquals(getWrittenResources().length, 1);
-  });
-}
-
-Deno.test("delete verifies the returned id before issuing DELETE", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "delete",
-  });
-
-  const { result, calls } = await withMockedFetch(
-    (request) => {
-      if (request.method === "GET") {
-        return jsonResponse({ connection: connection() });
-      }
-      return new Response(null, { status: 204 });
+  const { calls } = await withMockedFetch(
+    async (request) => {
+      requestBody = await request.json();
+      return jsonResponse({ connection: connection() });
     },
     () =>
-      model.methods.delete.execute(
-        { id: "connection-1" },
-        { ...context, globalArgs },
+      model.methods.updatePolicy.execute(
+        { id: "connection-1", access_policy: policy },
+        context,
       ),
   );
 
-  assertEquals(calls.map((call) => call.method), ["GET", "DELETE"]);
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "PUT");
+  assertEquals(
+    new URL(calls[0].url).pathname,
+    "/v1/oauth/connections/connection-1",
+  );
+  assertEquals(requestBody, { access_policy: policy });
+  assertEquals(getWrittenResources().length, 1);
+});
+
+Deno.test("delete sends one DELETE and stores the id", async () => {
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
+
+  const { result, calls } = await withMockedFetch(
+    [new Response(null, { status: 204 })],
+    () =>
+      model.methods.delete.execute(
+        { id: "connection-1" },
+        context,
+      ),
+  );
+
+  assertEquals(calls.map((call) => call.method), ["DELETE"]);
   assertEquals(result.dataHandles.length, 1);
   const writes = getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "deletion");
-  assertEquals(writes[0].name, "deletion");
   assertEquals(writes[0].data, { id: "connection-1" });
 });
 
-Deno.test("delete accepts a 404 from DELETE after a successful preflight", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "delete",
-  });
-
-  const { calls } = await withMockedFetch(
-    (request) =>
-      request.method === "GET"
-        ? jsonResponse({ connection: connection() })
-        : jsonResponse({ error: "not found" }, 404),
-    () =>
-      model.methods.delete.execute(
-        { id: "connection-1" },
-        { ...context, globalArgs },
-      ),
-  );
-
-  assertEquals(calls.map((call) => call.method), ["GET", "DELETE"]);
-  assertEquals(getWrittenResources()[0].data, {
-    id: "connection-1",
-  });
-});
-
-Deno.test("delete treats a 404 preflight as an already-completed deletion", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "delete",
-  });
+Deno.test("delete accepts a 404 as an already-completed deletion", async () => {
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ error: "not found" }, 404)],
     () =>
       model.methods.delete.execute(
         { id: "connection-1" },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
-  assertEquals(calls.map((call) => call.method), ["GET"]);
+  assertEquals(calls.map((call) => call.method), ["DELETE"]);
   assertEquals(getWrittenResources()[0].data, {
     id: "connection-1",
   });
 });
 
-Deno.test("delete stops without a write when preflight returns another id", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "delete",
-  });
-  let requestCount = 0;
-
-  const error = await assertRejects(
-    () =>
-      withMockedFetch(
-        (request) => {
-          requestCount += 1;
-          assertEquals(request.method, "GET");
-          return jsonResponse({
-            connection: connection({ id: "connection-other" }),
-          });
-        },
-        () =>
-          model.methods.delete.execute(
-            { id: "connection-1" },
-            { ...context, globalArgs },
-          ),
-      ),
-    Error,
-  );
-
-  assertStringIncludes(error.message, "different connector id");
-  assertEquals(requestCount, 1);
-  assertEquals(getWrittenResources(), []);
-});
-
 Deno.test("authorize sends OAuth query fields and stores sensitive output", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "authorize",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const { calls } = await withMockedFetch(
     [jsonResponse({
@@ -384,7 +279,7 @@ Deno.test("authorize sends OAuth query fields and stores sensitive output", asyn
           redirect_uri: "https://client.example.test/oauth/callback",
           state: "client-state",
         },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
@@ -403,10 +298,8 @@ Deno.test("authorize sends OAuth query fields and stores sensitive output", asyn
 });
 
 Deno.test("callback sends code and policy without the provider path field", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "callback",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -426,7 +319,7 @@ Deno.test("callback sends code and policy without the provider path field", asyn
           state: "server-state",
           access_policy: policy,
         },
-        { ...context, globalArgs },
+        context,
       ),
   );
 
@@ -443,16 +336,14 @@ Deno.test("callback sends code and policy without the provider path field", asyn
 });
 
 Deno.test("invalid API output fails without writing a resource", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "list",
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const error = await assertRejects(
     () =>
       withMockedFetch(
         [jsonResponse({ connections: [{ id: "incomplete" }] })],
-        () => model.methods.list.execute({}, { ...context, globalArgs }),
+        () => model.methods.list.execute({}, context),
       ),
     Error,
   );

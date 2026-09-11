@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { createModelTestContext } from "@swamp-club/swamp-testing";
+import type { Auth, Context } from "./core.ts";
 import type { Channel, Message } from "./socket.ts";
 
 export class FakeChannel implements Channel {
@@ -11,7 +13,6 @@ export class FakeChannel implements Channel {
   #ended = false;
   constructor(
     messages: Array<Message | null | Error>,
-    private readonly code = 1000,
     private readonly onClose?: () => Promise<void>,
   ) {
     this.#messages = [...messages];
@@ -44,7 +45,36 @@ export class FakeChannel implements Channel {
     }
     return this.#closing;
   }
-  closeCode(): number | undefined {
-    return this.closed || this.#ended ? this.code : undefined;
-  }
+}
+
+/** Typed model context with captured writes, logs, and events. */
+export function testContext<G extends Auth>(
+  globalArgs: G,
+  options: Pick<
+    NonNullable<Parameters<typeof createModelTestContext>[0]>,
+    "signal" | "storedResources"
+  > = {},
+): Context<G> & Omit<ReturnType<typeof createModelTestContext>, "context"> {
+  const { context, ...accessors } = createModelTestContext({
+    globalArgs,
+    ...options,
+  });
+  return {
+    ...context,
+    ...accessors,
+    globalArgs,
+    signal: options.signal ?? context.signal,
+    deleteResource: () => Promise.resolve(),
+  };
+}
+
+export function textFrame(value: unknown): Message {
+  return {
+    binary: false,
+    bytes: new TextEncoder().encode(JSON.stringify(value)),
+  };
+}
+
+export function binaryFrame(...bytes: number[]): Message {
+  return { binary: true, bytes: new Uint8Array(bytes) };
 }

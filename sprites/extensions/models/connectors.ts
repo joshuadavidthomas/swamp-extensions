@@ -5,7 +5,6 @@ import { z } from "zod";
 import {
   ApiError,
   AuthSchema,
-  type Context,
   emptyRequest,
   jsonRequest,
   method,
@@ -139,20 +138,6 @@ function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
 
-async function replacePolicy(
-  verb: "PATCH" | "PUT",
-  args: z.output<typeof PolicyArgsSchema>,
-  ctx: Context,
-): Promise<z.input<typeof ConnectionResponseSchema>> {
-  return await jsonRequest(
-    ctx,
-    verb,
-    `/v1/oauth/connections/${segment(args.id)}`,
-    ConnectionResponseSchema,
-    { json: { access_policy: args.access_policy } },
-  );
-}
-
 /** Complete organization-scoped Sprites connector collection model. */
 export const model = {
   type: "@josh/sprites/connectors",
@@ -184,14 +169,13 @@ export const model = {
       "connections",
       ConnectionsResponseSchema,
       async (args, ctx) => {
-        const result = await jsonRequest(
+        return await jsonRequest(
           ctx,
           "GET",
           "/v1/oauth/connections",
           ConnectionsResponseSchema,
           { query: { provider: args.provider } },
         );
-        return result;
       },
     ),
     createApiKey: method(
@@ -238,48 +222,27 @@ export const model = {
         );
       },
     ),
-    patchPolicy: method(
-      "Replace a connector access policy with PATCH",
-      PolicyArgsSchema,
-      "connection",
-      ConnectionResponseSchema,
-      (args, ctx) => replacePolicy("PATCH", args, ctx),
-    ),
     updatePolicy: method(
-      "Replace a connector access policy with PUT",
+      "Replace a connector access policy",
       PolicyArgsSchema,
       "connection",
       ConnectionResponseSchema,
-      (args, ctx) => replacePolicy("PUT", args, ctx),
+      (args, ctx) =>
+        jsonRequest(
+          ctx,
+          "PUT",
+          `/v1/oauth/connections/${segment(args.id)}`,
+          ConnectionResponseSchema,
+          { json: { access_policy: args.access_policy } },
+        ),
     ),
     delete: method(
-      "Delete a connector after verifying its organization-scoped id",
+      "Delete an organization connector",
       IdArgsSchema,
       "deletion",
       DeletionSchema,
       async (args, ctx) => {
         const path = `/v1/oauth/connections/${segment(args.id)}`;
-        let existing: z.output<typeof ConnectionResponseSchema>;
-        try {
-          existing = await jsonRequest(
-            ctx,
-            "GET",
-            path,
-            ConnectionResponseSchema,
-          );
-        } catch (error) {
-          if (isNotFound(error)) {
-            return { id: args.id };
-          }
-          throw error;
-        }
-
-        if (existing.connection.id !== args.id) {
-          throw new Error(
-            "Sprites returned a different connector id during deletion preflight; no delete was sent.",
-          );
-        }
-
         try {
           await emptyRequest(ctx, "DELETE", path);
         } catch (error) {

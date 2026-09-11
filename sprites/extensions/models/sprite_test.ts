@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
-import { assertEquals, assertRejects } from "@std/assert";
-import {
-  createModelTestContext,
-  withMockedFetch,
-} from "@swamp-club/swamp-testing";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
+import { testContext } from "./_lib/test_support.ts";
 import { model } from "./sprite.ts";
-import { type SpriteContext } from "./_lib/sprite-api.ts";
+import { type SpriteContext, spritePath } from "./_lib/sprite-api.ts";
 
 const globals = model.globalArguments.parse({
   name: "worker",
@@ -23,9 +21,10 @@ const replacement = {
 };
 Deno.test("Sprite names reject dot segments and uploads reject host filesystem paths", () => {
   for (const name of [".", ".."]) {
-    assertEquals(
-      model.globalArguments.safeParse({ ...globals, name }).success,
-      false,
+    assertThrows(
+      () => spritePath(testContext({ ...globals, name })),
+      Error,
+      "dot segment",
     );
   }
   const file = { kind: "file", path: "/etc/passwd" };
@@ -54,15 +53,10 @@ Deno.test("Sprite names reject dot segments and uploads reject host filesystem p
 });
 
 Deno.test("sessions use the provider object envelope and ownership requires numeric IDs", async () => {
-  const test = createModelTestContext({ globalArgs: globals });
-  const ctx: SpriteContext = {
-    ...test.context,
-    globalArgs: globals,
-    deleteResource: () => Promise.resolve(),
-  };
+  const test = testContext(globals);
   await withMockedFetch(
     [new Response('{"sessions":[]}')],
-    () => model.methods.listSessions.execute({}, ctx),
+    () => model.methods.listSessions.execute({}, test),
   );
   assertEquals(test.getWrittenResources()[0].data, {
     sessions: [],
@@ -84,12 +78,7 @@ Deno.test("sessions use the provider object envelope and ownership requires nume
 });
 
 Deno.test("nonempty session envelopes preserve the typed session fields", async () => {
-  const test = createModelTestContext({ globalArgs: globals });
-  const ctx: SpriteContext = {
-    ...test.context,
-    globalArgs: globals,
-    deleteResource: () => Promise.resolve(),
-  };
+  const test = testContext(globals);
   const session = {
     id: 7,
     command: "/bin/sleep 10",
@@ -101,7 +90,7 @@ Deno.test("nonempty session envelopes preserve the typed session fields", async 
   };
   await withMockedFetch(
     [new Response(JSON.stringify({ sessions: [session] }))],
-    () => model.methods.listSessions.execute({}, ctx),
+    () => model.methods.listSessions.execute({}, test),
   );
   assertEquals(test.getWrittenResources()[0].data, {
     sessions: [session],
@@ -109,17 +98,12 @@ Deno.test("nonempty session envelopes preserve the typed session fields", async 
 });
 
 Deno.test("mutations require a saved identity before adopting an existing Sprite", async () => {
-  const test = createModelTestContext({ globalArgs: globals });
-  const ctx: SpriteContext = {
-    ...test.context,
-    globalArgs: globals,
-    deleteResource: () => Promise.resolve(),
-  };
+  const test = testContext(globals);
   const { calls } = await withMockedFetch(
     [new Response(JSON.stringify(replacement))],
     () =>
       assertRejects(
-        () => model.methods.delete.execute({}, ctx),
+        () => model.methods.delete.execute({}, test),
         Error,
         "No Sprite identity is saved",
       ),
@@ -146,15 +130,9 @@ Deno.test("checkpoint, execution, attachment, and gateway mutations refuse a rep
     },
   ] as const;
   for (const item of cases) {
-    const test = createModelTestContext({
-      globalArgs: globals,
+    const test = testContext(globals, {
       storedResources: { state: { ...replacement, id: "old-id" } },
     });
-    const ctx: SpriteContext = {
-      ...test.context,
-      globalArgs: globals,
-      deleteResource: () => Promise.resolve(),
-    };
     const selected = model.methods[item.name] as unknown as {
       execute(args: unknown, ctx: SpriteContext): Promise<unknown>;
     };
@@ -162,7 +140,7 @@ Deno.test("checkpoint, execution, attachment, and gateway mutations refuse a rep
       [new Response(JSON.stringify(replacement))],
       () =>
         assertRejects(
-          () => selected.execute(item.args, ctx),
+          () => selected.execute(item.args, test),
           Error,
           "replaced",
         ),

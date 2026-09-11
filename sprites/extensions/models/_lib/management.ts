@@ -195,7 +195,6 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
         service_name: ManagementResourceName,
         signal: z.string().min(1).max(32),
       }),
-      "serviceSignaled",
       null,
       async (args, ctx: SpriteContext) => {
         await send(ctx, {
@@ -270,7 +269,6 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
     deleteTask: method(
       "Release a task hold; an already absent task succeeds",
       z.object({ name: ManagementResourceName }),
-      "taskDeleted",
       null,
       async (args, ctx: SpriteContext) => {
         await send(ctx, {

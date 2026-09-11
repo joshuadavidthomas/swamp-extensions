@@ -84,7 +84,6 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       body: { name: task.name, signal: "USR1" },
       status: 204,
       response: "",
-      spec: "serviceSignaled",
       output: undefined,
     },
     {
@@ -147,7 +146,6 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       status: 204,
       response: "",
-      spec: "taskDeleted",
       output: undefined,
     },
     {
@@ -157,7 +155,6 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       status: 404,
       response: "not found",
-      spec: "taskDeleted",
       output: undefined,
     },
   ] as const;

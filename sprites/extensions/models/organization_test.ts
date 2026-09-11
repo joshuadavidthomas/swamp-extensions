@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import {
-  createModelTestContext,
-  withMockedFetch,
-} from "@swamp-club/swamp-testing";
+import { withMockedFetch } from "@swamp-club/swamp-testing";
+import { testContext } from "./_lib/test_support.ts";
 import { model } from "./organization.ts";
 
 const globalArgs = {
@@ -17,7 +15,6 @@ const globalArgs = {
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
   });
 }
 
@@ -30,18 +27,14 @@ const emptyPageBase = {
   warm: 0,
   cold: 0,
 };
-type EmptyPage = typeof emptyPageBase;
 
-function emptyPage(overrides: Partial<EmptyPage> = {}): Response {
+function emptyPage(overrides: Partial<typeof emptyPageBase> = {}): Response {
   return response({ ...emptyPageBase, ...overrides });
 }
 
-const privateAccess = "admins";
-Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    methodName: "lookup",
-  });
+Deno.test("lookup reads every page and preserves admins access", async () => {
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const { result, calls } = await withMockedFetch(
     (request) => {
@@ -76,7 +69,7 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
           created_at: "2026-09-07T12:00:00+02:00",
           updated_at: "2026-09-09T09:00:00Z",
           url: "https://worker-1.example.com",
-          url_settings: { auth: "sprite", private_access: privateAccess },
+          url_settings: { auth: "sprite", private_access: "admins" },
           labels: ["ci"],
           last_running_at: "2026-09-09T11:30:00+02:00",
         }],
@@ -92,15 +85,15 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
     },
     () =>
       model.methods.lookup.execute(
-        { prefix: "worker-", pageSize: 2 },
-        { ...context, deleteResource: async () => {}, globalArgs },
+        { prefix: "worker-" },
+        context,
       ),
   );
 
   assertEquals(calls.length, 2);
   assertStringIncludes(calls[0].url, "/v1/sprites");
   assertStringIncludes(calls[0].url, "prefix=worker-");
-  assertStringIncludes(calls[0].url, "max_results=2");
+  assertStringIncludes(calls[0].url, "max_results=500");
   assertStringIncludes(calls[1].url, "continuation_token=page-2");
   assertEquals(calls[0].method, "GET");
   assertEquals(calls[0].headers.authorization, "Bearer test-token");
@@ -109,7 +102,6 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
   const writes = getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "inventory");
-  assertEquals(writes[0].name, "inventory");
 
   const inventory = writes[0].data;
   assertEquals(inventory.organization, {
@@ -124,7 +116,6 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
     cold: 1,
   });
   assertEquals(inventory.prefix, "worker-");
-  assertEquals(inventory.truncated, false);
   assertEquals(typeof inventory.observedAt, "string");
   assertEquals(inventory.sprites, [
     {
@@ -135,7 +126,7 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
       created_at: "2026-09-07T12:00:00+02:00",
       updated_at: "2026-09-09T09:00:00Z",
       url: "https://worker-1.example.com",
-      url_settings: { auth: "sprite", private_access: privateAccess },
+      url_settings: { auth: "sprite", private_access: "admins" },
       labels: ["ci"],
       last_running_at: "2026-09-09T11:30:00+02:00",
     },
@@ -154,15 +145,10 @@ Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async
 });
 
 Deno.test("lookup discovers an empty organization with a null terminal cursor", async () => {
-  const test = createModelTestContext({ globalArgs });
+  const test = testContext(globalArgs);
   const { calls } = await withMockedFetch(
-    [emptyPage({ next_continuation_token: null })],
-    () =>
-      model.methods.lookup.execute({ pageSize: 500 }, {
-        ...test.context,
-        deleteResource: async () => {},
-        globalArgs,
-      }),
+    [emptyPage()],
+    () => model.methods.lookup.execute({}, test),
   );
   assertEquals(calls.length, 1);
   const inventory = test.getWrittenResources()[0].data;
@@ -173,37 +159,26 @@ Deno.test("lookup discovers an empty organization with a null terminal cursor", 
   });
   assertEquals(inventory.counts, { total: 0, running: 0, warm: 0, cold: 0 });
   assertEquals(inventory.sprites, []);
-  assertEquals(inventory.truncated, false);
 });
 
 Deno.test("lookup rejects a null cursor when the API reports more pages", async () => {
-  const test = createModelTestContext({ globalArgs });
-  const { calls, result: error } = await withMockedFetch(
+  const test = testContext(globalArgs);
+  const { calls } = await withMockedFetch(
     [emptyPage({ has_more: true, next_continuation_token: null })],
     () =>
       assertRejects(
-        () =>
-          model.methods.lookup.execute({ pageSize: 500 }, {
-            ...test.context,
-            deleteResource: async () => {},
-            globalArgs,
-          }),
+        () => model.methods.lookup.execute({}, test),
         Error,
         "another page without a continuation token",
       ),
-  );
-  assertStringIncludes(
-    error.message,
-    "another page without a continuation token",
   );
   assertEquals(calls.length, 1);
   assertEquals(test.getWrittenResources(), []);
 });
 
 Deno.test("lookup fails before writing when the API rejects the token", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const error = await assertRejects(
     () =>
@@ -211,8 +186,8 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
         [response({ error: "unauthorized" }, 401)],
         () =>
           model.methods.lookup.execute(
-            { pageSize: 500 },
-            { ...context, deleteResource: async () => {}, globalArgs },
+            {},
+            context,
           ),
       ),
     Error,
@@ -223,31 +198,34 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
 });
 
 Deno.test("lookup rejects an incomplete API page", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
+  let requests = 0;
   const error = await assertRejects(
     () =>
       withMockedFetch(
-        () => response({ name: "acme" }),
+        () => {
+          requests++;
+          return response({ name: "acme" });
+        },
         () =>
           model.methods.lookup.execute(
-            { pageSize: 500 },
-            { ...context, deleteResource: async () => {}, globalArgs },
+            {},
+            context,
           ),
       ),
     Error,
   );
 
   assertStringIncludes(error.message, "invalid JSON response for its schema");
+  assertEquals(requests, 1);
   assertEquals(getWrittenResources(), []);
 });
 
 Deno.test("lookup rejects a repeated continuation token", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
 
   const error = await assertRejects(
     () =>
@@ -264,8 +242,8 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
         ],
         () =>
           model.methods.lookup.execute(
-            { pageSize: 500 },
-            { ...context, deleteResource: async () => {}, globalArgs },
+            {},
+            context,
           ),
       ),
     Error,
@@ -275,90 +253,37 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
   assertEquals(getWrittenResources(), []);
 });
 
-Deno.test("lookup retries a transient response", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
-
-  const { calls } = await withMockedFetch(
-    [
-      new Response("busy", {
-        status: 503,
-        headers: { "retry-after": "0" },
-      }),
-      emptyPage(),
-    ],
+Deno.test("lookup retries transient responses, network failures, and response-body read failures", async () => {
+  const failures = [
     () =>
-      model.methods.lookup.execute(
-        { pageSize: 500 },
-        { ...context, deleteResource: async () => {}, globalArgs },
-      ),
-  );
-
-  assertEquals(calls.length, 2);
-  assertEquals(getWrittenResources().length, 1);
-});
-
-Deno.test("lookup retries a network failure", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
-  let requests = 0;
-
-  const { calls } = await withMockedFetch(
+      new Response("busy", { status: 503, headers: { "retry-after": "0" } }),
     () => {
-      requests += 1;
-      if (requests === 1) {
-        throw new TypeError("connection reset");
-      }
-      return emptyPage();
+      throw new TypeError("connection reset");
     },
     () =>
-      model.methods.lookup.execute(
-        { pageSize: 500 },
-        { ...context, deleteResource: async () => {}, globalArgs },
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller): void {
+            controller.error(new Error("response interrupted"));
+          },
+        }),
       ),
-  );
-
-  assertEquals(calls.length, 2);
-  assertEquals(getWrittenResources().length, 1);
-});
-
-Deno.test("lookup retries a response-body read failure", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
-  let requests = 0;
-
-  const { calls } = await withMockedFetch(
-    () => {
-      requests += 1;
-      if (requests === 1) {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller): void {
-              controller.error(new Error("response interrupted"));
-            },
-          }),
-        );
-      }
-      return emptyPage();
-    },
-    () =>
-      model.methods.lookup.execute(
-        { pageSize: 500 },
-        { ...context, deleteResource: async () => {}, globalArgs },
-      ),
-  );
-
-  assertEquals(calls.length, 2);
-  assertEquals(getWrittenResources().length, 1);
+  ];
+  for (const firstFailure of failures) {
+    const context = testContext(globalArgs);
+    let requests = 0;
+    const { calls } = await withMockedFetch(
+      () => ++requests === 1 ? firstFailure() : emptyPage(),
+      () => model.methods.lookup.execute({}, context),
+    );
+    assertEquals(calls.length, 2);
+    assertEquals(context.getWrittenResources().length, 1);
+  }
 });
 
 Deno.test("lookup stops after transient retries are exhausted", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
+  const context = testContext(globalArgs);
+  const { getWrittenResources } = context;
   let requests = 0;
 
   const error = await assertRejects(
@@ -373,8 +298,8 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
         },
         () =>
           model.methods.lookup.execute(
-            { pageSize: 500 },
-            { ...context, deleteResource: async () => {}, globalArgs },
+            {},
+            context,
           ),
       ),
     Error,
@@ -387,9 +312,8 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
 
 Deno.test("lookup rejects a retry delay longer than its request budget", async () => {
   const shortBudget = { ...globalArgs, timeoutMs: 1_000 };
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs: shortBudget,
-  });
+  const context = testContext(shortBudget);
+  const { getWrittenResources } = context;
   let requests = 0;
 
   const error = await assertRejects(
@@ -404,12 +328,8 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
         },
         () =>
           model.methods.lookup.execute(
-            { pageSize: 500 },
-            {
-              ...context,
-              deleteResource: async () => {},
-              globalArgs: shortBudget,
-            },
+            {},
+            context,
           ),
       ),
     Error,
@@ -423,10 +343,8 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
 Deno.test("lookup honors parent cancellation without retrying", async () => {
   const controller = new AbortController();
   controller.abort(new DOMException("cancelled", "AbortError"));
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-    signal: controller.signal,
-  });
+  const context = testContext(globalArgs, { signal: controller.signal });
+  const { getWrittenResources } = context;
   let requests = 0;
 
   const error = await assertRejects(
@@ -441,8 +359,8 @@ Deno.test("lookup honors parent cancellation without retrying", async () => {
         },
         () =>
           model.methods.lookup.execute(
-            { pageSize: 500 },
-            { ...context, deleteResource: async () => {}, globalArgs },
+            {},
+            context,
           ),
       ),
     DOMException,
@@ -468,18 +386,13 @@ Deno.test("inventory enforces one aggregate byte budget across all pages without
     maxResponseBytes: new TextEncoder().encode(JSON.stringify(first)).length +
       1,
   };
-  const test = createModelTestContext({ globalArgs: limited });
+  const test = testContext(limited);
   let requests = 0;
   const error = await assertRejects(() =>
     withMockedFetch(() => {
       requests++;
       return requests === 1 ? response(first) : emptyPage();
-    }, () =>
-      model.methods.lookup.execute({ pageSize: 500 }, {
-        ...test.context,
-        deleteResource: async () => {},
-        globalArgs: limited,
-      })), Error);
+    }, () => model.methods.lookup.execute({}, test)), Error);
   assertStringIncludes(error.message, "maxResponseBytes");
   assertEquals(requests, 2);
   assertEquals(test.getWrittenResources(), []);

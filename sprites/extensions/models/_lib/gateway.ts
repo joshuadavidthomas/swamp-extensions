@@ -342,7 +342,7 @@ export async function relayGateway(
   args: z.output<typeof GatewayRequestArgs>,
   requester: GatewayRequester = requestGateway,
 ): Promise<GatewayHttpResponse> {
-  const body = await inputBytes(args.input);
+  const body = inputBytes(args.input);
   if (body.length > ctx.globalArgs.maxResponseBytes) {
     throw new Error(
       `Gateway request body exceeds maxResponseBytes (${ctx.globalArgs.maxResponseBytes}).`,

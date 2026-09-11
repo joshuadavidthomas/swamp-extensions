@@ -70,7 +70,6 @@ function setup(
     close: () => {
       closed++;
     },
-    closeCode: () => 1000,
   };
   const connect: ConnectChannel = (_ctx, value) => {
     connections++;

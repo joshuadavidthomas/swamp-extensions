@@ -364,7 +364,6 @@ Deno.test("proxy rejects a handshake still pending when duration cleanup aborts 
         channelClosed = true;
         rejectRead?.(new Error("active channel aborted"));
       },
-      closeCode: () => undefined,
     };
     const socket = new PassThrough();
     let accept: (socket: net.Socket) => void = () => {};
@@ -445,7 +444,6 @@ Deno.test("proxy duration treats active-channel abort of an established tunnel a
         channelClosed = true;
         rejectRead?.(new Error("active channel aborted before socket close"));
       },
-      closeCode: () => undefined,
     };
     const socket = new PassThrough();
     let accept: (socket: net.Socket) => void = () => {};
@@ -670,7 +668,6 @@ for (const rejectClose of [false, true]) {
         [
           binary(2, [...encoder.encode("connected\n")]),
         ],
-        1000,
         () => {
           closeStarted.resolve();
           return closing.promise;

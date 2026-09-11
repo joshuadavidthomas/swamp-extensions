@@ -182,7 +182,6 @@ Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and 
     const secondClose = channel.close();
     assertEquals(firstClose, secondClose);
     await firstClose;
-    assertEquals(channel.closeCode(), 1000);
 
     const controller = new AbortController();
     const cancelled = await openChannel(
@@ -197,7 +196,6 @@ Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and 
     const cancelledClose = cancelled.close();
     assertEquals(cancelledClose, cancelled.close());
     await cancelledClose;
-    assertEquals(cancelled.closeCode(), 1000);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     assertEquals(requests.length, 2);

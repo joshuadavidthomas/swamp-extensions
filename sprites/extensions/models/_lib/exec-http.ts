@@ -62,8 +62,8 @@ export async function decodeHttpExec(
   let exitCode: number | undefined;
   let received = 0;
   try {
-    let status = 0;
-    let headers = new Headers();
+    let status: number;
+    let headers: Headers;
     do {
       const line = await reader.line();
       const match = /^HTTP\/1\.[01] (\d{3})(?: |$)/.exec(line);
@@ -206,20 +206,20 @@ export async function executeHttp(
     const header = new TextEncoder().encode(
       `POST ${url.pathname}${url.search} HTTP/1.1\r\nHost: ${url.host}\r\nAuthorization: Bearer ${ctx.globalArgs.token}\r\nContent-Type: application/octet-stream\r\nAccept-Encoding: identity\r\nContent-Length: ${input.length}\r\nConnection: close\r\n\r\n`,
     );
+    const write = (part: Uint8Array): Promise<void> =>
+      new Promise((resolve, reject) =>
+        connection.write(part, (error) =>
+          error
+            ? reject(
+              new Error(
+                "HTTP exec request write failed; inspect the remote session before retrying.",
+              ),
+            )
+            : resolve())
+      );
     const send = async (): Promise<void> => {
-      for (const part of [header, input]) {
-        if (part.length === 0) continue;
-        await new Promise<void>((resolve, reject) =>
-          connection.write(part, (error) =>
-            error
-              ? reject(
-                new Error(
-                  "HTTP exec request write failed; inspect the remote session before retrying.",
-                ),
-              )
-              : resolve())
-        );
-      }
+      await write(header);
+      if (input.length) await write(input);
     };
     const stream = Readable.toWeb(connection) as ReadableStream<Uint8Array>;
     const [, result] = await Promise.all([
@@ -243,4 +243,15 @@ export function decodeStreamFrame(frame: Uint8Array):
     return { kind: "exit", code: frame[1] };
   }
   throw new Error("Sprite exec stream returned an invalid frame.");
+}
+
+/** Encode stdin for the selected terminal mode. */
+export function stdinFrame(tty: boolean, bytes: Uint8Array): Uint8Array {
+  return tty ? bytes : concatenate([new Uint8Array([0]), bytes]);
+}
+/** Signal the end of standard input. */
+export const EOF_FRAME = new Uint8Array([4]);
+/** Encode environment entries for repeated API query parameters. */
+export function envPairs(env: Record<string, string> | undefined): string[] {
+  return Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`);
 }

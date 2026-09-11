@@ -14,7 +14,6 @@ export type Channel = {
   read(): Promise<Message | null>;
   send(data: string | Uint8Array): Promise<void>;
   close(): void | Promise<void>;
-  closeCode(): number | undefined;
 };
 /** Socket construction boundary for transport integration tests. */
 export type SocketFactory = (
@@ -44,7 +43,6 @@ export async function openChannel(
   const queue: Message[] = [];
   let queueBytes = 0;
   let finished = false;
-  let code: number | undefined;
   let failure: Error | undefined;
   let drainQueueBeforeFailure = false;
   let wake: (() => void) | undefined;
@@ -130,9 +128,8 @@ export async function openChannel(
         true,
       ),
   );
-  ws.on("close", (value) => {
+  ws.on("close", () => {
     finished = true;
-    code = value;
     signal.removeEventListener("abort", onAbort);
     notify();
   });
@@ -191,9 +188,6 @@ export async function openChannel(
       );
     },
     close: shutdown,
-    closeCode(): number | undefined {
-      return code;
-    },
   };
 }
 
@@ -203,14 +197,13 @@ export type ConnectChannel = typeof openChannel;
 export async function readChannel(
   channel: Channel,
   signal: AbortSignal,
-  operation: string,
 ): Promise<Message | null> {
   signal.throwIfAborted();
   return await new Promise((resolve, reject) => {
     const cleanup = (): void => signal.removeEventListener("abort", onAbort);
     const onAbort = (): void => {
       cleanup();
-      reject(signal.reason ?? new Error(`${operation} was cancelled.`));
+      reject(signal.reason);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     channel.read().then(

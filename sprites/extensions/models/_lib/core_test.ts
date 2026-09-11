@@ -13,6 +13,7 @@ import {
   type Context,
   deadline,
   emptyRequest,
+  InvalidResponseError,
   jsonRequest,
   method,
   ndjson,
@@ -86,7 +87,7 @@ Deno.test("JSON boundary validates without echoing response payloads", async () 
             z.object({ id: z.string() }),
           ),
       ),
-    Error,
+    InvalidResponseError,
     "invalid JSON response",
   );
   assert(schemaError.message.includes("id: invalid_type"));
@@ -98,7 +99,7 @@ Deno.test("JSON boundary validates without echoing response payloads", async () 
         jsonRequest(ctx, "GET", "/v1/sprites/a", z.object({ id: z.string() })),
     )
   );
-  assert(error instanceof Error);
+  assert(error instanceof InvalidResponseError);
   assert(!error.message.includes("secret"));
 });
 Deno.test("JSON diagnostics bound and sanitize provider-controlled record keys", async () => {
@@ -110,7 +111,7 @@ Deno.test("JSON diagnostics bound and sanitize provider-controlled record keys",
         jsonRequest(ctx, "GET", "/records", z.record(z.string(), z.string())),
     )
   );
-  assert(error instanceof Error);
+  assert(error instanceof InvalidResponseError);
   assert(error.message.length < 400);
   assert(error.message.includes("[redacted]"));
   assert(!error.message.includes("secret"));
@@ -125,7 +126,7 @@ Deno.test("JSON rejects invalid UTF-8 instead of saving replacement characters",
         [new Response(wire)],
         () => jsonRequest(ctx, "GET", "/value", z.string()),
       ),
-    Error,
+    InvalidResponseError,
     "invalid JSON response",
   );
 });
@@ -259,7 +260,6 @@ Deno.test("method preserves validated input and orders extra handles before opti
   const bodyless = method(
     "Bodyless",
     args,
-    "unused",
     null,
     () => Promise.resolve(),
   );
@@ -269,7 +269,6 @@ Deno.test("method preserves validated input and orders extra handles before opti
   const artifacts = method(
     "Artifacts",
     args,
-    "unused",
     null,
     () => Promise.resolve(withHandles(undefined, [extra])),
   );

@@ -13,6 +13,7 @@ import {
   ApiError,
   AuthSchema,
   type Context,
+  InvalidResponseError,
   jsonRequest,
   method,
   resource,
@@ -25,9 +26,6 @@ const LookupArgsSchema = z.object({
   prefix: z.string().min(1).optional().describe(
     "Only include Sprite names with this prefix.",
   ),
-  pageSize: z.number().int().min(1).max(500).default(500).describe(
-    "Sprites requested per API page.",
-  ),
 });
 
 const ApiPageSchema = z.object({
@@ -35,9 +33,6 @@ const ApiPageSchema = z.object({
   has_more: z.boolean(),
   next_continuation_token: z.string().nullish(),
   name: z.string(),
-  running: z.number().int().nonnegative(),
-  warm: z.number().int().nonnegative(),
-  cold: z.number().int().nonnegative(),
   running_limit: z.number().int().nonnegative().optional(),
   warm_limit: z.number().int().nonnegative().optional(),
 });
@@ -56,12 +51,8 @@ const InventorySchema = z.object({
   }),
   sprites: z.array(SpriteResponse),
   prefix: z.string().nullable(),
-  truncated: z.boolean(),
   observedAt: z.iso.datetime({ offset: true }),
 });
-
-type ApiPage = z.infer<typeof ApiPageSchema>;
-type Inventory = z.infer<typeof InventorySchema>;
 
 const retryableStatuses = new Set([429, 502, 503, 504]);
 const maxAttempts = 3;
@@ -106,12 +97,12 @@ async function listSpritesPage(
   args: z.infer<typeof LookupArgsSchema>,
   budget: { remaining: number },
   continuationToken?: string,
-): Promise<ApiPage> {
+) {
   for (let attempt = 1;; attempt += 1) {
     try {
       return await jsonRequest(ctx, "GET", "/v1/sprites", ApiPageSchema, {
         query: {
-          max_results: args.pageSize,
+          max_results: 500,
           prefix: args.prefix,
           continuation_token: continuationToken,
         },
@@ -120,6 +111,7 @@ async function listSpritesPage(
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       if (error instanceof ResponseLimitError) throw error;
+      if (error instanceof InvalidResponseError) throw error;
       if (error instanceof ApiError && !retryableStatuses.has(error.status)) {
         throw error;
       }
@@ -157,10 +149,6 @@ export const model = {
       "inventory",
       InventorySchema,
       async (args, context: Context) => {
-        context.logger.info("Reading Sprites organization inventory", {
-          prefix: args.prefix ?? "all",
-        });
-
         const budget = { remaining: context.globalArgs.maxResponseBytes };
         const seenTokens = new Set<string>();
         let page = await listSpritesPage(context, args, budget);
@@ -192,7 +180,7 @@ export const model = {
           statusCounts[sprite.status] += 1;
         }
 
-        const inventory: Inventory = {
+        const inventory = {
           organization,
           counts: {
             total: sprites.length,
@@ -200,7 +188,6 @@ export const model = {
           },
           sprites,
           prefix: args.prefix ?? null,
-          truncated: false,
           observedAt: new Date().toISOString(),
         };
 

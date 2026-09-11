@@ -145,7 +145,6 @@ class ExecProxyDuplex extends Duplex {
         const message = await readChannel(
           this.channel,
           this.budget.signal,
-          "Sprite exec TCP relay",
         );
         if (this.#finished) return;
         this.budget.check("Sprite exec TCP relay exceeded timeoutMs.");
@@ -273,7 +272,6 @@ export async function connectExecProxy(
       const message = await readChannel(
         channel,
         signal,
-        "Sprite exec TCP relay",
       );
       if (!message) throw failure("disconnected before connecting.");
       handshakeBytes += message.bytes.length;

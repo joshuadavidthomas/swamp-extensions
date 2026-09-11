@@ -5,9 +5,7 @@ import { AuthSchema, type Context, jsonRequest, segment } from "./core.ts";
 
 /** One model instance owns one named Sprite in the token's organization. */
 export const SpriteArgsSchema = AuthSchema.extend({
-  name: z.string().min(1).refine((name) => name !== "." && name !== "..", {
-    error: "Sprite name must not be a relative path segment.",
-  }).describe(
+  name: z.string().min(1).describe(
     "Sprite name within the token's organization.",
   ),
 });

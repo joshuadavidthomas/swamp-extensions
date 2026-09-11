@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: MIT
 /** Bounded filesystem and listening-port observations. @module */
 import { z } from "zod";
-import { deadline, method, type Query, resource } from "./core.ts";
+import {
+  deadline,
+  decodeFrame,
+  method,
+  type Query,
+  resource,
+  sanitize,
+} from "./core.ts";
 import {
   type Channel,
   type ConnectChannel,
@@ -93,20 +100,6 @@ type Observation<F, E, T> = {
   durationMs: number;
 };
 
-function decodeFrame<S extends z.ZodType>(
-  bytes: Uint8Array,
-  schema: S,
-  error: string,
-): z.output<S> {
-  try {
-    return schema.parse(
-      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
-    );
-  } catch {
-    throw new Error(error);
-  }
-}
-
 async function observe<F, E, T>(
   ctx: SpriteContext,
   options: Observation<F, E, T>,
@@ -133,7 +126,7 @@ async function observe<F, E, T>(
     }
     let receivedBytes = 0;
     const read = async () => {
-      const message = await readChannel(channel!, signal, options.operation);
+      const message = await readChannel(channel!, signal);
       if (message) {
         receivedBytes += message.bytes.length;
         if (receivedBytes > options.byteBound) {
@@ -197,10 +190,9 @@ async function observe<F, E, T>(
 }
 
 function watchError(message: string | undefined, token: string): Error {
-  const reason = message?.replaceAll(token, "[redacted]").replace(
-    /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu,
-    " ",
-  ).slice(0, 512);
+  const reason = message === undefined
+    ? undefined
+    : sanitize(message, token, 512);
   return new Error(
     `Filesystem watch reported an error${reason ? `: ${reason}` : "."}`,
   );

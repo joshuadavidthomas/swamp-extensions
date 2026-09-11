@@ -182,7 +182,7 @@ async function sendAction(
 ): Promise<void> {
   let payload: Uint8Array | string;
   if (action.type === "stdin") {
-    const bytes = await inputBytes(action.input);
+    const bytes = inputBytes(action.input);
     payload = operation.tty ? bytes : concatenate([new Uint8Array([0]), bytes]);
   } else if (action.type === "eof") {
     payload = new Uint8Array([4]);
@@ -258,7 +258,7 @@ async function runOperation(
     budget.check(TIMEOUT_MESSAGE);
   };
   if (operation.input !== undefined) {
-    await sendInput(await inputBytes(operation.input));
+    await sendInput(inputBytes(operation.input));
   }
   if (
     operation.input !== undefined && operation.closeStdin && !operation.tty &&

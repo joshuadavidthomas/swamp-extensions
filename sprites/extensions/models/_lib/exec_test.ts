@@ -48,7 +48,6 @@ function setup(messages: Message[]) {
     close: () => {
       closed = true;
     },
-    closeCode: () => 1000,
   };
   const connect: ConnectChannel = (_ctx, path, value) => {
     connectedPath = path;

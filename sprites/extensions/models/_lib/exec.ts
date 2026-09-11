@@ -194,7 +194,7 @@ export async function executeSocket(
         JSON.stringify({ type: "resize", rows: args.rows, cols: args.cols }),
       );
     }
-    if (args.input) await sendInput(await inputBytes(args.input));
+    if (args.input) await sendInput(inputBytes(args.input));
     if (
       args.closeStdin && !tty &&
       !args.actions.some((action) =>
@@ -206,7 +206,7 @@ export async function executeSocket(
         timers.delete(timer);
         const perform = async (): Promise<void> => {
           if (action.type === "stdin") {
-            await sendInput(await inputBytes(action.input));
+            await sendInput(inputBytes(action.input));
           } else if (action.type === "eof") {
             if (!tty) await channel.send(new Uint8Array([4]));
           } else if (action.type === "resize") {
@@ -401,7 +401,7 @@ export const execMethods = {
           `${key}=${value}`
         ),
         stdin: args.input !== undefined,
-      }, new Uint8Array(await inputBytes(args.input)));
+      }, inputBytes(args.input));
       return await saveExecution(ctx, {
         ...result,
         status: "exited",

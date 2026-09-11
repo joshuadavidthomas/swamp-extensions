@@ -371,7 +371,6 @@ export const restMethods = {
   upgrade: method(
     "Request a runtime upgrade; success only acknowledges provider acceptance",
     z.object({ version: z.string().min(1).optional() }),
-    "upgradeRequested",
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -386,7 +385,6 @@ export const restMethods = {
   restart: method(
     "Request a restart of the machine backing this Sprite",
     Empty,
-    "restartRequested",
     null,
     async (_args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -442,7 +440,6 @@ export const restMethods = {
   delete: method(
     "Delete the configured Sprite",
     Empty,
-    "deleted",
     null,
     async (_args, ctx: SpriteContext) => {
       try {
@@ -534,7 +531,6 @@ export const restMethods = {
   setNetworkPolicy: method(
     "Replace the Sprite network policy",
     NetworkPolicy,
-    "networkPolicySet",
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -559,7 +555,6 @@ export const restMethods = {
   setPrivilegesPolicy: method(
     "Set the Sprite privilege policy",
     PrivilegesPolicy,
-    "privilegesPolicySet",
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -571,7 +566,6 @@ export const restMethods = {
   deletePrivilegesPolicy: method(
     "Remove the Sprite privilege policy",
     Empty,
-    "privilegesPolicyDeleted",
     null,
     async (_args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -594,7 +588,6 @@ export const restMethods = {
   setResourcesPolicy: method(
     "Set the Sprite resource policy",
     ResourcesPolicy,
-    "resourcesPolicySet",
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -606,7 +599,6 @@ export const restMethods = {
   deleteResourcesPolicy: method(
     "Remove the Sprite resource policy",
     Empty,
-    "resourcesPolicyDeleted",
     null,
     async (_args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -724,7 +716,6 @@ export const restMethods = {
   deleteService: method(
     "Delete a Sprite service",
     z.object({ service_name: z.string().min(1) }),
-    "serviceDeleted",
     null,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -780,7 +771,7 @@ export const restMethods = {
     FsWrite,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const bytes = await inputBytes(args.content);
+      const bytes = inputBytes(args.content);
       return await jsonRequest(ctx, "PUT", fsPath(ctx, "write"), FsWrite, {
         query: {
           path: args.path,
