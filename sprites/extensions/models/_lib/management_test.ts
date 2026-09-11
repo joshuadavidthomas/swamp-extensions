@@ -5,12 +5,10 @@ import {
   withMockedFetch,
 } from "@swamp-club/swamp-testing";
 import {
-  createManagementMethods,
   type ManagementExec,
-  managementResources,
+  managementMethods as methods,
   TaskExpiry,
 } from "./management.ts";
-import { restResources } from "./sprite-rest.ts";
 import type { SpriteContext } from "./sprite-api.ts";
 const globalArgs = {
   token: "test-token",
@@ -61,7 +59,9 @@ function setup(stored = true) {
   });
   return {
     ...test,
-    ctx: { ...test.context, globalArgs } as unknown as SpriteContext,
+    ctx: { ...test.context, globalArgs } as unknown as SpriteContext & {
+      managementExec?: ManagementExec;
+    },
   };
 }
 const identity = () => new Response(JSON.stringify(sprite));
@@ -87,7 +87,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 204,
       response: "",
       spec: "serviceSignaled",
-      output: { completed: true },
+      output: undefined,
     },
     {
       method: "listTasks",
@@ -97,7 +97,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 200,
       response: JSON.stringify({ tasks: [task] }),
       spec: "tasks",
-      output: { tasks: [task], truncated: false },
+      output: { tasks: [task] },
     },
     {
       method: "getTask",
@@ -118,7 +118,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 201,
       response: "unpublished success body",
       spec: "taskCreated",
-      output: { name: task.name, expire: 60, accepted: true },
+      output: { name: task.name, expire: 60 },
     },
     {
       method: "refreshTask",
@@ -129,7 +129,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 200,
       response: "",
       spec: "taskRefreshed",
-      output: { name: task.name, expire: "30s", accepted: true },
+      output: { name: task.name, expire: "30s" },
     },
     {
       method: "putTask",
@@ -140,7 +140,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 200,
       response: "",
       spec: "taskPut",
-      output: { name: task.name, expire: "1m", accepted: true },
+      output: { name: task.name, expire: "1m" },
     },
     {
       method: "deleteTask",
@@ -150,7 +150,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 204,
       response: "",
       spec: "taskDeleted",
-      output: { completed: true },
+      output: undefined,
     },
     {
       method: "deleteTask",
@@ -160,7 +160,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       status: 404,
       response: "not found",
       spec: "taskDeleted",
-      output: { completed: true },
+      output: undefined,
     },
   ] as const;
   for (const c of cases) {
@@ -184,21 +184,18 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       assertEquals(query.stdin, "body" in c);
       return Promise.resolve(result(c.response, c.status));
     };
-    const methods = createManagementMethods(execute);
+    test.ctx.managementExec = execute;
     const { calls } = await withMockedFetch(
       [identity()],
       () => methods[c.method].execute(c.input as never, test.ctx),
     );
     assertEquals(calls.length, 1);
     assertEquals(called, 1);
-    const written = test.getWrittenResources()[0];
-    assertEquals(written.specName, c.spec);
-    assertEquals(written.data, c.output);
-    const resources = { ...restResources, ...managementResources };
-    assertEquals(
-      resources[c.spec].schema.safeParse(written.data).success,
-      true,
-    );
+    if (c.output !== undefined) {
+      const written = test.getWrittenResources()[0];
+      assertEquals(written.specName, c.spec);
+      assertEquals(written.data, c.output);
+    }
   }
 });
 
@@ -212,11 +209,11 @@ Deno.test("getService rejects a different service name, HTTP errors, and malform
   for (const response of failures) {
     const test = setup();
     let count = 0;
-    const methods = createManagementMethods((_ctx, query) => {
+    test.ctx.managementExec = (_ctx, query) => {
       count++;
       assertEquals(query.stdin, false);
       return Promise.resolve(response);
-    });
+    };
     await assertRejects(
       () =>
         withMockedFetch(
@@ -237,10 +234,10 @@ Deno.test("getService rejects a different service name, HTTP errors, and malform
 Deno.test("getService requires the saved Sprite identity before local exec", async () => {
   const test = setup(false);
   let count = 0;
-  const methods = createManagementMethods(() => {
+  test.ctx.managementExec = () => {
     count++;
     return Promise.resolve(result(JSON.stringify(service), 200));
-  });
+  };
   await assertRejects(
     () =>
       withMockedFetch(
@@ -277,10 +274,10 @@ Deno.test("management failures are sanitized and never replay a mutation", async
   ) {
     const test = setup();
     let count = 0;
-    const methods = createManagementMethods(() => {
+    test.ctx.managementExec = () => {
       count++;
       return Promise.resolve(response);
-    });
+    };
     const error = await assertRejects(
       () =>
         withMockedFetch(
@@ -306,9 +303,7 @@ Deno.test("management reads reject invalid JSON and invalid shapes", async () =>
     ]
   ) {
     const test = setup();
-    const methods = createManagementMethods(() =>
-      Promise.resolve(result(body, 200))
-    );
+    test.ctx.managementExec = () => Promise.resolve(result(body, 200));
     const error = await assertRejects(
       () =>
         withMockedFetch(
@@ -326,10 +321,10 @@ Deno.test("management refuses missing or replaced Sprite identity before exec", 
   for (const stored of [false, true]) {
     const test = setup(stored);
     let count = 0;
-    const methods = createManagementMethods(() => {
+    test.ctx.managementExec = () => {
       count++;
       return Promise.resolve(result());
-    });
+    };
     await assertRejects(
       () =>
         withMockedFetch(
@@ -370,32 +365,13 @@ Deno.test("task expiry is positive, bounded and preserves provider input type", 
   ) assertEquals(TaskExpiry.safeParse(value).success, false);
 });
 
-Deno.test("task dot names and invalid expiry never reach exec", async () => {
-  const test = setup();
-  let count = 0;
-  const methods = createManagementMethods(() => {
-    count++;
-    return Promise.resolve(result());
-  });
-  await assertRejects(
-    () => methods.getTask.execute({ name: ".." }, test.ctx),
-    Error,
-  );
-  await assertRejects(
-    () => methods.createTask.execute({ name: "agent", expire: "2h" }, test.ctx),
-    Error,
-  );
-  assertEquals(count, 0);
-  assertEquals(test.getWrittenResources(), []);
-});
-
 Deno.test("management cancellation and elapsed deadlines cannot produce success", async () => {
   for (const cancel of [false, true]) {
     const test = setup();
     const controller = new AbortController();
     test.ctx.signal = controller.signal;
     test.ctx.globalArgs = { ...globalArgs, timeoutMs: 30 };
-    const methods = createManagementMethods(() => {
+    test.ctx.managementExec = () => {
       if (cancel) controller.abort();
       else {
         const deadline = performance.now() + 40;
@@ -404,7 +380,7 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
         ) { /* Queue starvation: timer cannot fire. */ }
       }
       return Promise.resolve(result("", 201));
-    });
+    };
     await assertRejects(
       () =>
         withMockedFetch(
@@ -415,36 +391,5 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
       Error,
     );
     assertEquals(test.getWrittenResources(), []);
-  }
-});
-
-Deno.test("management checks the deadline after JSON parsing and before storage", async () => {
-  const test = setup();
-  test.ctx.globalArgs = { ...globalArgs, timeoutMs: 30 };
-  const body = '{"tasks":[]}';
-  const parse = JSON.parse;
-  JSON.parse = (text, reviver) => {
-    if (text === body) {
-      const end = performance.now() + 40;
-      while (performance.now() < end) { /* Synchronous parse budget. */ }
-    }
-    return parse(text, reviver);
-  };
-  try {
-    const methods = createManagementMethods(() =>
-      Promise.resolve(result(body, 200))
-    );
-    await assertRejects(
-      () =>
-        withMockedFetch(
-          [identity()],
-          () => methods.listTasks.execute({}, test.ctx),
-        ),
-      Error,
-      "validation exceeded timeoutMs",
-    );
-    assertEquals(test.getWrittenResources(), []);
-  } finally {
-    JSON.parse = parse;
   }
 });

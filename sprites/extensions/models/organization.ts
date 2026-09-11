@@ -9,30 +9,16 @@
  */
 
 import { z } from "zod";
-import { responseBytes, ResponseLimitError } from "./_lib/core.ts";
+import {
+  AuthSchema,
+  type Context,
+  method,
+  resource,
+  responseBytes,
+  ResponseLimitError,
+} from "./_lib/core.ts";
 
-const GlobalArgsSchema = z.object({
-  token: z.string().min(1).meta({ sensitive: true }).describe(
-    "Organization-scoped Sprites API token. Use a vault reference.",
-  ),
-  baseUrl: z.url().refine(
-    (value) => new URL(value).protocol === "https:",
-    "Use an HTTPS API endpoint.",
-  ).default("https://api.sprites.dev").describe(
-    "Sprites API base URL without the /v1 suffix.",
-  ),
-  maxResponseBytes: z.number().int().min(1).max(1_073_741_824).default(
-    67_108_864,
-  ).describe(
-    "Maximum combined response bytes across inventory pages; exceeding the limit fails without saving partial inventory.",
-  ),
-  timeoutMs: z.number().int().positive().max(2_147_483_647).default(30_000)
-    .describe(
-      "API request timeout in milliseconds.",
-    ),
-});
-
-type GlobalArgs = z.infer<typeof GlobalArgsSchema>;
+import { SpriteResponse } from "./_lib/sprite-api.ts";
 
 const LookupArgsSchema = z.object({
   prefix: z.string().min(1).optional().describe(
@@ -53,38 +39,19 @@ const SpriteSchema = z.object({
   name: z.string(),
   organization: z.string(),
   status: z.enum(["cold", "warm", "running"]),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
+  createdAt: z.iso.datetime({ offset: true }),
+  updatedAt: z.iso.datetime({ offset: true }),
   url: z.string(),
   urlSettings: UrlSettingsSchema.nullable(),
   version: z.string().nullable(),
   environmentVersion: z.string().nullable(),
   labels: z.array(z.string()),
-  lastRunningAt: z.iso.datetime().nullable(),
-  lastWarmingAt: z.iso.datetime().nullable(),
-});
-
-const ApiSpriteSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  organization: z.string(),
-  status: z.enum(["cold", "warm", "running"]),
-  created_at: z.iso.datetime({ offset: true }),
-  updated_at: z.iso.datetime({ offset: true }),
-  url: z.string(),
-  url_settings: z.object({
-    auth: z.enum(["sprite", "public"]),
-    private_access: z.enum(["admins", "org_users"]).optional(),
-  }).nullish(),
-  version: z.string().nullish(),
-  environment_version: z.string().nullish(),
-  labels: z.array(z.string()).optional(),
-  last_running_at: z.iso.datetime({ offset: true }).nullish(),
-  last_warming_at: z.iso.datetime({ offset: true }).nullish(),
+  lastRunningAt: z.iso.datetime({ offset: true }).nullable(),
+  lastWarmingAt: z.iso.datetime({ offset: true }).nullable(),
 });
 
 const ApiPageSchema = z.object({
-  sprites: z.array(ApiSpriteSchema),
+  sprites: z.array(SpriteResponse),
   has_more: z.boolean(),
   next_continuation_token: z.string().nullish(),
   name: z.string(),
@@ -110,47 +77,16 @@ const InventorySchema = z.object({
   sprites: z.array(SpriteSchema),
   prefix: z.string().nullable(),
   truncated: z.boolean(),
-  observedAt: z.iso.datetime(),
+  observedAt: z.iso.datetime({ offset: true }),
 });
 
 type ApiPage = z.infer<typeof ApiPageSchema>;
-type ApiSprite = z.infer<typeof ApiSpriteSchema>;
+type ApiSprite = z.infer<typeof SpriteResponse>;
 type Inventory = z.infer<typeof InventorySchema>;
 type NormalizedSprite = z.infer<typeof SpriteSchema>;
 
-type MethodContext = {
-  globalArgs: GlobalArgs;
-  signal: AbortSignal;
-  logger: {
-    info(message: string, properties?: Record<string, unknown>): void;
-  };
-  writeResource(
-    specName: string,
-    instanceName: string,
-    data: Record<string, unknown>,
-  ): Promise<{ name: string }>;
-};
-
 function withoutTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
-}
-
-function isoDate(value: string, field: string, spriteName: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error(
-      `Sprites API returned an invalid ${field} date for Sprite ${spriteName}`,
-    );
-  }
-  return date.toISOString();
-}
-
-function optionalIsoDate(
-  value: string | null | undefined,
-  field: string,
-  spriteName: string,
-): string | null {
-  return value ? isoDate(value, field, spriteName) : null;
 }
 
 function normalizeSprite(sprite: ApiSprite): NormalizedSprite {
@@ -159,8 +95,8 @@ function normalizeSprite(sprite: ApiSprite): NormalizedSprite {
     name: sprite.name,
     organization: sprite.organization,
     status: sprite.status,
-    createdAt: isoDate(sprite.created_at, "created_at", sprite.name),
-    updatedAt: isoDate(sprite.updated_at, "updated_at", sprite.name),
+    createdAt: sprite.created_at,
+    updatedAt: sprite.updated_at,
     url: sprite.url,
     urlSettings: sprite.url_settings
       ? {
@@ -171,16 +107,8 @@ function normalizeSprite(sprite: ApiSprite): NormalizedSprite {
     version: sprite.version ?? null,
     environmentVersion: sprite.environment_version ?? null,
     labels: sprite.labels ?? [],
-    lastRunningAt: optionalIsoDate(
-      sprite.last_running_at,
-      "last_running_at",
-      sprite.name,
-    ),
-    lastWarmingAt: optionalIsoDate(
-      sprite.last_warming_at,
-      "last_warming_at",
-      sprite.name,
-    ),
+    lastRunningAt: sprite.last_running_at ?? null,
+    lastWarmingAt: sprite.last_warming_at ?? null,
   };
 }
 
@@ -232,7 +160,7 @@ function waitForRetry(
 }
 
 async function listSpritesPage(
-  globalArgs: GlobalArgs,
+  globalArgs: Context["globalArgs"],
   signal: AbortSignal,
   args: z.infer<typeof LookupArgsSchema>,
   budget: { remaining: number },
@@ -324,23 +252,23 @@ async function listSpritesPage(
 export const model = {
   type: "@josh/sprites/organization",
   version: "2026.09.09.1",
-  globalArguments: GlobalArgsSchema,
+  // Inventory allows 30 seconds per page, including larger organization lists.
+  globalArguments: AuthSchema.extend({
+    timeoutMs: AuthSchema.shape.timeoutMs.default(30_000),
+  }),
   resources: {
-    inventory: {
-      description: "Current Sprites and capacity limits for one organization",
-      schema: InventorySchema,
-      lifetime: "infinite",
-      garbageCollection: 10,
-    },
+    inventory: resource(
+      InventorySchema,
+      "Current Sprites and capacity limits for one organization",
+    ),
   },
   methods: {
-    lookup: {
-      description: "Read every Sprite visible to the organization token",
-      arguments: LookupArgsSchema,
-      execute: async (
-        args: z.infer<typeof LookupArgsSchema>,
-        context: MethodContext,
-      ): Promise<{ dataHandles: Array<{ name: string }> }> => {
+    lookup: method(
+      "Read every Sprite visible to the organization token",
+      LookupArgsSchema,
+      "inventory",
+      InventorySchema,
+      async (args, context: Context) => {
         context.logger.info("Reading Sprites organization inventory", {
           prefix: args.prefix ?? "all",
         });
@@ -410,7 +338,7 @@ export const model = {
           statusCounts[sprite.status] += 1;
         }
 
-        const inventory: Inventory = InventorySchema.parse({
+        const inventory: Inventory = {
           organization: {
             name: organizationName,
             runningLimit: runningLimit ?? null,
@@ -424,21 +352,15 @@ export const model = {
           prefix: args.prefix ?? null,
           truncated: false,
           observedAt: new Date().toISOString(),
-        });
-
-        const handle = await context.writeResource(
-          "inventory",
-          "current",
-          inventory,
-        );
+        };
 
         context.logger.info("Read {count} Sprites for organization {name}", {
           count: inventory.counts.total,
           name: inventory.organization.name,
         });
 
-        return { dataHandles: [handle] };
+        return inventory;
       },
-    },
+    ),
   },
 };

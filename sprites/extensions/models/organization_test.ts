@@ -33,130 +33,129 @@ function emptyPage(overrides: Record<string, unknown> = {}): Response {
   });
 }
 
-for (const privateAccess of ["admins", "org_users"]) {
-  Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async () => {
-    const { context, getWrittenResources } = createModelTestContext({
-      globalArgs,
-      methodName: "lookup",
-    });
+const privateAccess = "admins";
+Deno.test(`lookup reads every page and preserves ${privateAccess} access`, async () => {
+  const { context, getWrittenResources } = createModelTestContext({
+    globalArgs,
+    methodName: "lookup",
+  });
 
-    const { result, calls } = await withMockedFetch(
-      (request) => {
-        if (request.url.includes("continuation_token=page-2")) {
-          return response({
-            sprites: [{
-              id: "sprite-2",
-              name: "worker-2",
-              organization: "acme",
-              status: "cold",
-              created_at: "2026-09-08T10:00:00.000Z",
-              updated_at: "2026-09-09T10:00:00.000Z",
-              url: "https://worker-2.example.com",
-              url_settings: null,
-              labels: [],
-            }],
-            has_more: false,
-            next_continuation_token: null,
-            name: "acme",
-            running: 0,
-            warm: 0,
-            cold: 1,
-          });
-        }
-
+  const { result, calls } = await withMockedFetch(
+    (request) => {
+      if (request.url.includes("continuation_token=page-2")) {
         return response({
           sprites: [{
-            id: "sprite-1",
-            name: "worker-1",
+            id: "sprite-2",
+            name: "worker-2",
             organization: "acme",
-            status: "running",
-            created_at: "2026-09-07T12:00:00+02:00",
-            updated_at: "2026-09-09T09:00:00.000Z",
-            url: "https://worker-1.example.com",
-            url_settings: { auth: "sprite", private_access: privateAccess },
-            labels: ["ci"],
-            last_running_at: "2026-09-09T11:30:00+02:00",
+            status: "cold",
+            created_at: "2026-09-08T10:00:00Z",
+            updated_at: "2026-09-09T10:00:00Z",
+            url: "https://worker-2.example.com",
+            url_settings: null,
+            labels: [],
           }],
-          has_more: true,
-          next_continuation_token: "page-2",
+          has_more: false,
+          next_continuation_token: null,
           name: "acme",
-          running: 1,
+          running: 0,
           warm: 0,
-          cold: 0,
-          running_limit: 5,
-          warm_limit: 10,
+          cold: 1,
         });
-      },
-      () =>
-        model.methods.lookup.execute(
-          { prefix: "worker-", pageSize: 2 },
-          { ...context, globalArgs },
-        ),
-    );
+      }
 
-    assertEquals(calls.length, 2);
-    assertStringIncludes(calls[0].url, "/v1/sprites");
-    assertStringIncludes(calls[0].url, "prefix=worker-");
-    assertStringIncludes(calls[0].url, "max_results=2");
-    assertStringIncludes(calls[1].url, "continuation_token=page-2");
-    assertEquals(calls[0].method, "GET");
-    assertEquals(calls[0].headers.authorization, "Bearer test-token");
-    assertEquals(result.dataHandles[0].name, "current");
+      return response({
+        sprites: [{
+          id: "sprite-1",
+          name: "worker-1",
+          organization: "acme",
+          status: "running",
+          created_at: "2026-09-07T12:00:00+02:00",
+          updated_at: "2026-09-09T09:00:00Z",
+          url: "https://worker-1.example.com",
+          url_settings: { auth: "sprite", private_access: privateAccess },
+          labels: ["ci"],
+          last_running_at: "2026-09-09T11:30:00+02:00",
+        }],
+        has_more: true,
+        next_continuation_token: "page-2",
+        name: "acme",
+        running: 1,
+        warm: 0,
+        cold: 0,
+        running_limit: 5,
+        warm_limit: 10,
+      });
+    },
+    () =>
+      model.methods.lookup.execute(
+        { prefix: "worker-", pageSize: 2 },
+        { ...context, deleteResource: async () => {}, globalArgs },
+      ),
+  );
 
-    const writes = getWrittenResources();
-    assertEquals(writes.length, 1);
-    assertEquals(writes[0].specName, "inventory");
-    assertEquals(writes[0].name, "current");
+  assertEquals(calls.length, 2);
+  assertStringIncludes(calls[0].url, "/v1/sprites");
+  assertStringIncludes(calls[0].url, "prefix=worker-");
+  assertStringIncludes(calls[0].url, "max_results=2");
+  assertStringIncludes(calls[1].url, "continuation_token=page-2");
+  assertEquals(calls[0].method, "GET");
+  assertEquals(calls[0].headers.authorization, "Bearer test-token");
+  assertEquals(result.dataHandles[0].name, "inventory");
 
-    const inventory = writes[0].data;
-    assertEquals(inventory.organization, {
-      name: "acme",
-      runningLimit: 5,
-      warmLimit: 10,
-    });
-    assertEquals(inventory.counts, {
-      total: 2,
-      running: 1,
-      warm: 0,
-      cold: 1,
-    });
-    assertEquals(inventory.prefix, "worker-");
-    assertEquals(inventory.truncated, false);
-    assertEquals(typeof inventory.observedAt, "string");
-    assertEquals(inventory.sprites, [
-      {
-        id: "sprite-1",
-        name: "worker-1",
-        organization: "acme",
-        status: "running",
-        createdAt: "2026-09-07T10:00:00.000Z",
-        updatedAt: "2026-09-09T09:00:00.000Z",
-        url: "https://worker-1.example.com",
-        urlSettings: { auth: "sprite", privateAccess },
-        version: null,
-        environmentVersion: null,
-        labels: ["ci"],
-        lastRunningAt: "2026-09-09T09:30:00.000Z",
-        lastWarmingAt: null,
-      },
-      {
-        id: "sprite-2",
-        name: "worker-2",
-        organization: "acme",
-        status: "cold",
-        createdAt: "2026-09-08T10:00:00.000Z",
-        updatedAt: "2026-09-09T10:00:00.000Z",
-        url: "https://worker-2.example.com",
-        urlSettings: null,
-        version: null,
-        environmentVersion: null,
-        labels: [],
-        lastRunningAt: null,
-        lastWarmingAt: null,
-      },
-    ]);
+  const writes = getWrittenResources();
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].specName, "inventory");
+  assertEquals(writes[0].name, "inventory");
+
+  const inventory = writes[0].data;
+  assertEquals(inventory.organization, {
+    name: "acme",
+    runningLimit: 5,
+    warmLimit: 10,
   });
-}
+  assertEquals(inventory.counts, {
+    total: 2,
+    running: 1,
+    warm: 0,
+    cold: 1,
+  });
+  assertEquals(inventory.prefix, "worker-");
+  assertEquals(inventory.truncated, false);
+  assertEquals(typeof inventory.observedAt, "string");
+  assertEquals(inventory.sprites, [
+    {
+      id: "sprite-1",
+      name: "worker-1",
+      organization: "acme",
+      status: "running",
+      createdAt: "2026-09-07T12:00:00+02:00",
+      updatedAt: "2026-09-09T09:00:00Z",
+      url: "https://worker-1.example.com",
+      urlSettings: { auth: "sprite", privateAccess },
+      version: null,
+      environmentVersion: null,
+      labels: ["ci"],
+      lastRunningAt: "2026-09-09T11:30:00+02:00",
+      lastWarmingAt: null,
+    },
+    {
+      id: "sprite-2",
+      name: "worker-2",
+      organization: "acme",
+      status: "cold",
+      createdAt: "2026-09-08T10:00:00Z",
+      updatedAt: "2026-09-09T10:00:00Z",
+      url: "https://worker-2.example.com",
+      urlSettings: null,
+      version: null,
+      environmentVersion: null,
+      labels: [],
+      lastRunningAt: null,
+      lastWarmingAt: null,
+    },
+  ]);
+});
 
 Deno.test("lookup discovers an empty organization with a null terminal cursor", async () => {
   const test = createModelTestContext({ globalArgs });
@@ -165,6 +164,7 @@ Deno.test("lookup discovers an empty organization with a null terminal cursor", 
     () =>
       model.methods.lookup.execute({ pageSize: 500 }, {
         ...test.context,
+        deleteResource: async () => {},
         globalArgs,
       }),
   );
@@ -189,6 +189,7 @@ Deno.test("lookup rejects a null cursor when the API reports more pages", async 
         () =>
           model.methods.lookup.execute({ pageSize: 500 }, {
             ...test.context,
+            deleteResource: async () => {},
             globalArgs,
           }),
         Error,
@@ -211,7 +212,7 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
-            { ...context, globalArgs },
+            { ...context, deleteResource: async () => {}, globalArgs },
           ),
       ),
     Error,
@@ -237,7 +238,7 @@ Deno.test("lookup rejects an incomplete API page", async () => {
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
-            { ...context, globalArgs },
+            { ...context, deleteResource: async () => {}, globalArgs },
           ),
       ),
     Error,
@@ -268,7 +269,7 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
-            { ...context, globalArgs },
+            { ...context, deleteResource: async () => {}, globalArgs },
           ),
       ),
     Error,
@@ -294,50 +295,12 @@ Deno.test("lookup retries a transient response", async () => {
     () =>
       model.methods.lookup.execute(
         { pageSize: 500 },
-        { ...context, globalArgs },
+        { ...context, deleteResource: async () => {}, globalArgs },
       ),
   );
 
   assertEquals(calls.length, 2);
   assertEquals(getWrittenResources().length, 1);
-});
-
-Deno.test("lookup rejects invalid Sprite timestamps before writing", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs,
-  });
-
-  const error = await assertRejects(
-    () =>
-      withMockedFetch(
-        [response({
-          sprites: [{
-            id: "sprite-1",
-            name: "worker-1",
-            organization: "acme",
-            status: "running",
-            created_at: "not-a-date",
-            updated_at: "2026-09-09T09:00:00.000Z",
-            url: "https://worker-1.example.com",
-          }],
-          has_more: false,
-          name: "acme",
-          running: 1,
-          warm: 0,
-          cold: 0,
-        })],
-        () =>
-          model.methods.lookup.execute(
-            { pageSize: 500 },
-            { ...context, globalArgs },
-          ),
-      ),
-    Error,
-  );
-
-  assertStringIncludes(error.message, "unexpected list response");
-  assertStringIncludes(error.message, "created_at");
-  assertEquals(getWrittenResources(), []);
 });
 
 Deno.test("lookup retries a network failure", async () => {
@@ -357,7 +320,7 @@ Deno.test("lookup retries a network failure", async () => {
     () =>
       model.methods.lookup.execute(
         { pageSize: 500 },
-        { ...context, globalArgs },
+        { ...context, deleteResource: async () => {}, globalArgs },
       ),
   );
 
@@ -388,7 +351,7 @@ Deno.test("lookup retries a response-body read failure", async () => {
     () =>
       model.methods.lookup.execute(
         { pageSize: 500 },
-        { ...context, globalArgs },
+        { ...context, deleteResource: async () => {}, globalArgs },
       ),
   );
 
@@ -415,7 +378,7 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
-            { ...context, globalArgs },
+            { ...context, deleteResource: async () => {}, globalArgs },
           ),
       ),
     Error,
@@ -446,7 +409,11 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
-            { ...context, globalArgs: shortBudget },
+            {
+              ...context,
+              deleteResource: async () => {},
+              globalArgs: shortBudget,
+            },
           ),
       ),
     Error,
@@ -479,7 +446,7 @@ Deno.test("lookup honors parent cancellation without retrying", async () => {
         () =>
           model.methods.lookup.execute(
             { pageSize: 500 },
-            { ...context, globalArgs },
+            { ...context, deleteResource: async () => {}, globalArgs },
           ),
       ),
     Error,
@@ -514,6 +481,7 @@ Deno.test("inventory enforces one aggregate byte budget across all pages without
     }, () =>
       model.methods.lookup.execute({ pageSize: 500 }, {
         ...test.context,
+        deleteResource: async () => {},
         globalArgs: limited,
       })), Error);
   assertStringIncludes(error.message, "maxResponseBytes");

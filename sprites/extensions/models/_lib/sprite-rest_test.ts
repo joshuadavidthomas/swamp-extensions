@@ -96,7 +96,7 @@ const routeCases: Array<{
   path: string;
   response: Response;
   verifies?: boolean;
-  output: string;
+  output: string | undefined;
 }> = [
   {
     name: "create",
@@ -130,7 +130,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/upgrade",
     response: noContent(),
     verifies: true,
-    output: "upgradeRequested",
+    output: undefined,
   },
   {
     name: "delete",
@@ -139,7 +139,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite",
     response: noContent(),
     verifies: true,
-    output: "deleted",
+    output: undefined,
   },
   {
     name: "createCheckpoint",
@@ -190,7 +190,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/network",
     response: noContent(),
     verifies: true,
-    output: "networkPolicySet",
+    output: undefined,
   },
   {
     name: "getPrivilegesPolicy",
@@ -211,7 +211,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/privileges",
     response: noContent(),
     verifies: true,
-    output: "privilegesPolicySet",
+    output: undefined,
   },
   {
     name: "deletePrivilegesPolicy",
@@ -220,7 +220,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/privileges",
     response: noContent(),
     verifies: true,
-    output: "privilegesPolicyDeleted",
+    output: undefined,
   },
   {
     name: "getResourcesPolicy",
@@ -237,7 +237,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/resources",
     response: noContent(),
     verifies: true,
-    output: "resourcesPolicySet",
+    output: undefined,
   },
   {
     name: "deleteResourcesPolicy",
@@ -246,7 +246,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/policy/resources",
     response: noContent(),
     verifies: true,
-    output: "resourcesPolicyDeleted",
+    output: undefined,
   },
   {
     name: "listServices",
@@ -312,7 +312,7 @@ const routeCases: Array<{
     path: "/v1/sprites/demo%20sprite/services/web%2FAPI",
     response: noContent(),
     verifies: true,
-    output: "serviceDeleted",
+    output: undefined,
   },
   {
     name: "listFiles",
@@ -458,7 +458,7 @@ Deno.test("every JSON and NDJSON REST method uses its provider route and writes 
   }
 });
 
-Deno.test("upgrade records a bodyless provider acknowledgement", async () => {
+Deno.test("upgrade sends a bodyless request", async () => {
   const test = createModelTestContext({
     globalArgs,
     storedResources: { state: sprite },
@@ -472,10 +472,9 @@ Deno.test("upgrade records a bodyless provider acknowledgement", async () => {
       }),
   );
   assertEquals(calls[1].body, "");
-  assertEquals(test.getWrittenResources()[0].data, { accepted: true });
 });
 
-Deno.test("upgrade records the explicitly requested version in its acknowledgement", async () => {
+Deno.test("upgrade sends the explicitly requested version", async () => {
   const test = createModelTestContext({
     globalArgs,
     storedResources: { state: sprite },
@@ -494,10 +493,6 @@ Deno.test("upgrade records the explicitly requested version in its acknowledgeme
       }),
   );
   assertEquals(body, { version: "0.0.1-rc48" });
-  assertEquals(test.getWrittenResources()[0].data, {
-    accepted: true,
-    requestedVersion: "0.0.1-rc48",
-  });
 });
 
 Deno.test("upgrade API errors write no acknowledgement", async () => {
@@ -544,10 +539,9 @@ Deno.test("restart verifies identity, sends no body, and treats any success body
     "https://api.sprites.dev/v1/sprites/demo%20sprite/restart",
   );
   assertEquals(calls[1].body, "");
-  assertEquals(test.getWrittenResources()[0].data, { accepted: true });
 });
 
-Deno.test("restart failure writes nothing and is not retried", async () => {
+Deno.test("restart propagates failure without retrying", async () => {
   const test = createModelTestContext({
     globalArgs,
     storedResources: { state: sprite },
@@ -565,7 +559,6 @@ Deno.test("restart failure writes nothing and is not retried", async () => {
       ),
   );
   assertEquals(calls.length, 2);
-  assertEquals(test.getWrittenResources(), []);
 });
 
 Deno.test("restart refuses missing and replaced identities before POST", async () => {
@@ -588,7 +581,6 @@ Deno.test("restart refuses missing and replaced identities before POST", async (
     );
     assertEquals(calls.length, 1);
     assertEquals(calls[0].method, "GET");
-    assertEquals(test.getWrittenResources(), []);
   }
 });
 
@@ -658,7 +650,6 @@ Deno.test("probeUrl refuses missing and replaced identities before the URL reque
     );
     assertEquals(calls.length, 1);
     assertEquals(calls[0].method, "GET");
-    assertEquals(test.getWrittenResources(), []);
   }
 });
 
@@ -694,7 +685,6 @@ Deno.test("probeUrl rejects non-provider root URLs before an application request
     );
     assertEquals(calls.length, 1, url);
     assertEquals(calls[0].method, "GET", url);
-    assertEquals(test.getWrittenResources(), [], url);
   }
 });
 
@@ -731,7 +721,6 @@ Deno.test("probeUrl enforces response size and saves no failed status", async ()
         ),
       Error,
     );
-    assertEquals(test.getWrittenResources(), []);
   }
 });
 
@@ -768,7 +757,6 @@ Deno.test("probeUrl cancels a non-200 body", async () => {
     Error,
   );
   assertEquals(cancelled, true);
-  assertEquals(test.getWrittenResources(), []);
 });
 
 Deno.test("probeUrl honors an aborted operation and writes nothing", async () => {
@@ -797,7 +785,6 @@ Deno.test("probeUrl honors an aborted operation and writes nothing", async () =>
       ),
     Error,
   );
-  assertEquals(test.getWrittenResources(), []);
 });
 
 Deno.test("create binds the global name and sends every supported option in provider spelling", async () => {
@@ -867,7 +854,7 @@ Deno.test("filesystem requests preserve binary bytes and DELETE uses a JSON body
   });
 });
 
-Deno.test("NDJSON failures and incomplete streams write nothing", async () => {
+Deno.test("NDJSON rejects provider errors, malformed events, and incomplete streams", async () => {
   for (
     const body of [
       '{"type":"error","error":"disk full","time":"2026-01-02T00:00:00Z"}\n',
@@ -875,7 +862,7 @@ Deno.test("NDJSON failures and incomplete streams write nothing", async () => {
       "{broken}\n",
     ]
   ) {
-    const { context, getWrittenResources } = createModelTestContext({
+    const { context } = createModelTestContext({
       globalArgs,
       storedResources: { state: sprite },
     });
@@ -891,10 +878,9 @@ Deno.test("NDJSON failures and incomplete streams write nothing", async () => {
         ),
       Error,
     );
-    assertEquals(getWrittenResources(), []);
   }
 
-  const { context, getWrittenResources } = createModelTestContext({
+  const { context } = createModelTestContext({
     globalArgs,
   });
   const error = await assertRejects(
@@ -910,7 +896,6 @@ Deno.test("NDJSON failures and incomplete streams write nothing", async () => {
     Error,
   );
   assertStringIncludes(error.message, "without a complete event");
-  assertEquals(getWrittenResources(), []);
 });
 
 Deno.test("startup exits fail even with complete, while stop and log exits remain data", async () => {
@@ -941,7 +926,6 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
           Error,
           `exited during startup with code ${code}`,
         );
-        assertEquals(test.getWrittenResources(), []);
       }
     }
   }
@@ -969,7 +953,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
 });
 
 Deno.test("Sprite deletion treats a missing Sprite as already deleted", async () => {
-  const { context, getWrittenResources } = createModelTestContext({
+  const { context } = createModelTestContext({
     globalArgs,
   });
   const { calls } = await withMockedFetch(
@@ -983,5 +967,4 @@ Deno.test("Sprite deletion treats a missing Sprite as already deleted", async ()
   );
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "GET");
-  assertEquals(getWrittenResources()[0].data, { completed: true });
 });

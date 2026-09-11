@@ -3,7 +3,6 @@
 
 import { z } from "zod";
 import {
-  Acknowledgement,
   ApiError,
   AuthSchema,
   type Context,
@@ -24,9 +23,7 @@ const AccessPolicySchema = z.object({
   name_prefix: z.string().optional().describe(
     "Require Sprite names to start with this prefix.",
   ),
-  allowed_endpoints: z.array(z.string()).optional().describe(
-    "Provider paths allowed by this replacement policy.",
-  ),
+  allowed_endpoints: z.array(z.string()).optional(),
   blocked_endpoints: z.array(z.string()).optional().describe(
     "Provider paths denied before allowed_endpoints are evaluated.",
   ),
@@ -74,12 +71,8 @@ const ConnectionResponseSchema = z.object({
   connection: ConnectionSchema,
 });
 
-const ApiConnectionsResponseSchema = z.object({
+const ConnectionsResponseSchema = z.object({
   connections: z.array(ConnectionSchema),
-});
-
-const ConnectionsOutputSchema = ApiConnectionsResponseSchema.extend({
-  truncated: z.literal(false),
 });
 
 const AuthorizationSchema = z.object({
@@ -87,32 +80,24 @@ const AuthorizationSchema = z.object({
   state: z.string().meta({ sensitive: true }),
 });
 
-const DeletionSchema = Acknowledgement.extend({
+const DeletionSchema = z.object({
   id: z.string(),
 });
 
-const ProviderArgSchema = z.string().min(1).describe(
-  "Connector provider sent as the provider API field.",
-);
+const ProviderArgSchema = z.string().min(1);
 
-const IdArgSchema = z.string().min(1).describe(
-  "Organization-scoped connector id sent as the id API path field.",
-);
+const IdArgSchema = z.string().min(1);
 
 const ListArgsSchema = z.object({
-  provider: z.string().optional().describe(
-    "Optional provider API field used to filter connections.",
-  ),
+  provider: z.string().optional(),
 });
 
 const CreateApiKeyArgsSchema = z.object({
   provider: ProviderArgSchema,
   api_key: z.string().min(1).meta({ sensitive: true }).describe(
-    "Provider credential sent as the api_key API field; use a vault reference.",
+    "Use a vault reference for the provider credential.",
   ),
-  access_policy: AccessPolicySchema.optional().describe(
-    "Optional replacement policy sent as the access_policy API field.",
-  ),
+  access_policy: AccessPolicySchema.optional(),
 });
 
 const ProvisionArgsSchema = z.object({
@@ -125,9 +110,7 @@ const IdArgsSchema = z.object({
 
 const PolicyArgsSchema = z.object({
   id: IdArgSchema,
-  access_policy: AccessPolicySchema.describe(
-    "Complete replacement policy sent as the access_policy API field.",
-  ),
+  access_policy: AccessPolicySchema,
 });
 
 const AuthorizeArgsSchema = z.object({
@@ -138,9 +121,7 @@ const AuthorizeArgsSchema = z.object({
   add_scopes: z.string().optional().describe(
     "Comma-separated add_scopes API field added to an existing grant.",
   ),
-  redirect_uri: z.string().optional().describe(
-    "OAuth redirect_uri API field.",
-  ),
+  redirect_uri: z.string().optional(),
   state: z.string().optional().meta({ sensitive: true }).describe(
     "Optional OAuth state API field. Sprites generates one when omitted.",
   ),
@@ -148,23 +129,11 @@ const AuthorizeArgsSchema = z.object({
 
 const CallbackArgsSchema = z.object({
   provider: ProviderArgSchema,
-  code: z.string().min(1).meta({ sensitive: true }).describe(
-    "OAuth authorization code sent as the code API field.",
-  ),
-  redirect_uri: z.string().optional().describe(
-    "OAuth redirect_uri API field.",
-  ),
-  state: z.string().optional().meta({ sensitive: true }).describe(
-    "OAuth state API field returned by the authorization step.",
-  ),
-  access_policy: AccessPolicySchema.optional().describe(
-    "Optional replacement policy sent as the access_policy API field.",
-  ),
+  code: z.string().min(1).meta({ sensitive: true }),
+  redirect_uri: z.string().optional(),
+  state: z.string().optional().meta({ sensitive: true }),
+  access_policy: AccessPolicySchema.optional(),
 });
-
-function validateTransport(ctx: Context): void {
-  AuthSchema.parse(ctx.globalArgs);
-}
 
 function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
@@ -175,7 +144,6 @@ async function replacePolicy(
   args: z.output<typeof PolicyArgsSchema>,
   ctx: Context,
 ): Promise<z.input<typeof ConnectionResponseSchema>> {
-  validateTransport(ctx);
   return await jsonRequest(
     ctx,
     verb,
@@ -196,7 +164,7 @@ export const model = {
       "One organization connector with its current access policy",
     ),
     connections: resource(
-      ConnectionsOutputSchema,
+      ConnectionsResponseSchema,
       "Complete organization connector collection",
     ),
     authorization: resource(
@@ -206,7 +174,7 @@ export const model = {
     ),
     deletion: resource(
       DeletionSchema,
-      "Acknowledgement of an idempotent connector deletion",
+      "ID of the deleted or already absent connector",
     ),
   },
   methods: {
@@ -214,17 +182,16 @@ export const model = {
       "List organization connectors",
       ListArgsSchema,
       "connections",
-      ConnectionsOutputSchema,
+      ConnectionsResponseSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         const result = await jsonRequest(
           ctx,
           "GET",
           "/v1/oauth/connections",
-          ApiConnectionsResponseSchema,
+          ConnectionsResponseSchema,
           { query: { provider: args.provider } },
         );
-        return { ...result, truncated: false as const };
+        return result;
       },
     ),
     createApiKey: method(
@@ -233,7 +200,6 @@ export const model = {
       "connection",
       ConnectionResponseSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         return await jsonRequest(
           ctx,
           "POST",
@@ -249,7 +215,6 @@ export const model = {
       "connection",
       ConnectionResponseSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         return await jsonRequest(
           ctx,
           "POST",
@@ -265,7 +230,6 @@ export const model = {
       "connection",
       ConnectionResponseSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         return await jsonRequest(
           ctx,
           "GET",
@@ -294,7 +258,6 @@ export const model = {
       "deletion",
       DeletionSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         const path = `/v1/oauth/connections/${segment(args.id)}`;
         let existing: z.output<typeof ConnectionResponseSchema>;
         try {
@@ -306,7 +269,7 @@ export const model = {
           );
         } catch (error) {
           if (isNotFound(error)) {
-            return { id: args.id, completed: true as const };
+            return { id: args.id };
           }
           throw error;
         }
@@ -322,7 +285,7 @@ export const model = {
         } catch (error) {
           if (!isNotFound(error)) throw error;
         }
-        return { id: args.id, completed: true as const };
+        return { id: args.id };
       },
     ),
     authorize: method(
@@ -331,7 +294,6 @@ export const model = {
       "authorization",
       AuthorizationSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         const { provider, ...query } = args;
         return await jsonRequest(
           ctx,
@@ -348,7 +310,6 @@ export const model = {
       "connection",
       ConnectionResponseSchema,
       async (args, ctx) => {
-        validateTransport(ctx);
         const { provider, ...json } = args;
         return await jsonRequest(
           ctx,

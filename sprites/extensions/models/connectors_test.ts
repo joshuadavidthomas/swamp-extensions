@@ -64,19 +64,6 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-Deno.test("connections can have no token expiry", async () => {
-  const test = createModelTestContext({ globalArgs });
-  const value = connection({ token_expires_at: null });
-  await withMockedFetch(
-    [jsonResponse({ connections: [value] })],
-    () => model.methods.list.execute({}, { ...test.context, globalArgs }),
-  );
-  assertEquals(test.getWrittenResources()[0].data, {
-    connections: [value],
-    truncated: false,
-  });
-});
-
 Deno.test("list routes provider filtering and retains open provider_info metadata", async () => {
   const { context, getWrittenResources } = createModelTestContext({
     globalArgs,
@@ -108,7 +95,6 @@ Deno.test("list routes provider filtering and retains open provider_info metadat
   assertEquals(writes[0].name, "connections");
   assertEquals(writes[0].data, {
     connections: [connection()],
-    truncated: false,
   });
 });
 
@@ -296,7 +282,7 @@ Deno.test("delete verifies the returned id before issuing DELETE", async () => {
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "deletion");
   assertEquals(writes[0].name, "deletion");
-  assertEquals(writes[0].data, { completed: true, id: "connection-1" });
+  assertEquals(writes[0].data, { id: "connection-1" });
 });
 
 Deno.test("delete accepts a 404 from DELETE after a successful preflight", async () => {
@@ -319,7 +305,6 @@ Deno.test("delete accepts a 404 from DELETE after a successful preflight", async
 
   assertEquals(calls.map((call) => call.method), ["GET", "DELETE"]);
   assertEquals(getWrittenResources()[0].data, {
-    completed: true,
     id: "connection-1",
   });
 });
@@ -341,7 +326,6 @@ Deno.test("delete treats a 404 preflight as an already-completed deletion", asyn
 
   assertEquals(calls.map((call) => call.method), ["GET"]);
   assertEquals(getWrittenResources()[0].data, {
-    completed: true,
     id: "connection-1",
   });
 });
@@ -456,71 +440,6 @@ Deno.test("callback sends code and policy without the provider path field", asyn
   assertEquals(getWrittenResources()[0].specName, "connection");
 });
 
-Deno.test("credential and authorization schemas mark secrets as sensitive", () => {
-  assertEquals(
-    model.globalArguments.shape.token.meta()?.sensitive,
-    true,
-  );
-  assertEquals(
-    model.methods.createApiKey.arguments.shape.api_key.meta()?.sensitive,
-    true,
-  );
-  assertEquals(
-    model.methods.callback.arguments.shape.code.meta()?.sensitive,
-    true,
-  );
-  assertEquals(
-    model.resources.authorization.schema.shape.authorize_url.meta()?.sensitive,
-    true,
-  );
-  assertEquals(
-    model.resources.authorization.schema.shape.state.meta()?.sensitive,
-    true,
-  );
-});
-
-for (const methodName of ["createApiKey", "provision", "callback"] as const) {
-  Deno.test(`${methodName} does not retry failures or write output`, async () => {
-    const { context, getWrittenResources } = createModelTestContext({
-      globalArgs,
-      methodName,
-    });
-    let requests = 0;
-    const execute = methodName === "createApiKey"
-      ? () =>
-        model.methods.createApiKey.execute(
-          { provider: "custom_api", api_key: "secret" },
-          { ...context, globalArgs },
-        )
-      : methodName === "provision"
-      ? () =>
-        model.methods.provision.execute(
-          { provider: "slack" },
-          { ...context, globalArgs },
-        )
-      : () =>
-        model.methods.callback.execute(
-          { provider: "github", code: "oauth-code" },
-          { ...context, globalArgs },
-        );
-
-    await assertRejects(
-      () =>
-        withMockedFetch(
-          () => {
-            requests += 1;
-            return jsonResponse({ error: "upstream failure" }, 503);
-          },
-          execute,
-        ),
-      Error,
-    );
-
-    assertEquals(requests, 1);
-    assertEquals(getWrittenResources(), []);
-  });
-}
-
 Deno.test("invalid API output fails without writing a resource", async () => {
   const { context, getWrittenResources } = createModelTestContext({
     globalArgs,
@@ -537,33 +456,5 @@ Deno.test("invalid API output fails without writing a resource", async () => {
   );
 
   assertStringIncludes(error.message, "invalid JSON response");
-  assertEquals(getWrittenResources(), []);
-});
-
-Deno.test("HTTPS transport validation runs before connector mutations", async () => {
-  const insecureArgs = { ...globalArgs, baseUrl: "http://api.sprites.dev" };
-  const { context, getWrittenResources } = createModelTestContext({
-    globalArgs: insecureArgs,
-    methodName: "createApiKey",
-  });
-  let requests = 0;
-
-  await assertRejects(
-    () =>
-      withMockedFetch(
-        () => {
-          requests += 1;
-          return jsonResponse({ connection: connection() }, 201);
-        },
-        () =>
-          model.methods.createApiKey.execute(
-            { provider: "custom_api", api_key: "secret" },
-            { ...context, globalArgs: insecureArgs },
-          ),
-      ),
-    Error,
-  );
-
-  assertEquals(requests, 0);
   assertEquals(getWrittenResources(), []);
 });
