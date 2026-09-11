@@ -1,0 +1,53 @@
+manifestVersion: 1
+name: "@josh/sprites"
+version: "2026.09.10.1"
+description: |
+  Swamp models for Fly.io Sprites: organization inventory, named Sprites, and
+  connectors. Sprite methods cover execution, files, services, checkpoints,
+  policies, and network access.
+
+  The organization token determines the scope of each model. Sprite mutations
+  require a saved identity and reject a replacement with the same name. Exec
+  saves execution metadata and binary stdout and stderr artifacts.
+
+  ## Models
+
+  | Model type | Description |
+  | --- | --- |
+  | `@josh/sprites/sprite` | Manage one named Sprite and its execution, files, services, checkpoints, policies, and networking. |
+  | `@josh/sprites/organization` | List organization inventory. |
+  | `@josh/sprites/connectors` | Create connectors and manage connector policies and OAuth. |
+
+  ## Requirements
+
+  - An organization token stored in a Swamp vault.
+  - `/.sprite/bin/python3` inside the Sprite for sized TTY commands and the TCP proxy.
+
+  ## Usage
+
+  Store the token in an existing vault, configure a model, create the remote
+  Sprite, and run a command:
+
+  ```sh
+  swamp vault put sprites-secrets API_TOKEN
+  swamp model create @josh/sprites/sprite build-sprite \
+    --global-arg name=build-worker \
+    --global-arg 'token=${{ vault.get("sprites-secrets", "API_TOKEN") }}'
+  swamp model method run build-sprite create
+  swamp model method run build-sprite exec --input '{"cmd":["python3","-c","print(6 * 7)"]}'
+  ```
+repository: https://github.com/joshuadavidthomas/sprite-swamp
+
+models:
+  - sprite.ts
+  - organization.ts
+  - connectors.ts
+
+additionalFiles:
+  - LICENSE
+  - README.md
+
+platforms: []
+labels:
+  - fly.io
+  - sprites

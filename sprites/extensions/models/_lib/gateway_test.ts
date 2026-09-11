@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: MIT
+import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import { EventEmitter } from "node:events";
+import { PassThrough, Readable } from "node:stream";
+import type * as https from "node:https";
+import type * as tls from "node:tls";
+import type { SpriteContext } from "./sprite-api.ts";
+import {
+  discoverGateway,
+  gatewayFiles,
+  type GatewayHttpResponse,
+  gatewayMethods,
+  gatewayResources,
+  relayGateway,
+  requestGateway,
+} from "./gateway.ts";
+
+const globalArgs = {
+  token: "outer-secret",
+  baseUrl: "https://api.sprites.dev",
+  timeoutMs: 30_000,
+  maxResponseBytes: 1_000_000,
+  name: "demo",
+};
+const ctx = {
+  globalArgs,
+  signal: new AbortController().signal,
+} as SpriteContext;
+function response(
+  overrides: Partial<GatewayHttpResponse> = {},
+): GatewayHttpResponse {
+  return {
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    bodyBytes: 0,
+    body: new Uint8Array(),
+    ...overrides,
+  };
+}
+
+Deno.test("gateway supports extension methods and protects response header credentials", async () => {
+  await relayGateway(ctx, {
+    provider: "custom_api",
+    connection_id: "c1",
+    providerPath: "/items",
+    method: "PROPFIND",
+  }, (_ctx, request) => {
+    assertEquals(request.method, "PROPFIND");
+    return Promise.resolve(response({ status: 207 }));
+  });
+  assertEquals(
+    gatewayResources.gatewayResponse.schema.shape.headers.meta()?.sensitive,
+    true,
+  );
+});
+
+Deno.test("gateway discovery uses the Sprite tunnel and retains open metadata", async () => {
+  const body = new TextEncoder().encode(JSON.stringify({
+    connections: [{
+      provider: "slack",
+      gateway_base_url: "/v1/gateway/slack/c1",
+      unpublished: { color: "blue" },
+    }],
+    available: [{
+      setup_url: "/setup/github",
+      provider: "github",
+      flags: [true, null],
+    }],
+  }));
+  const output = await discoverGateway(ctx, (_ctx, request) => {
+    assertEquals(request, {
+      method: "GET",
+      path: "/v1/gateway/list",
+      headers: { accept: "application/json" },
+      body: new Uint8Array(),
+    });
+    return Promise.resolve(response({ body, bodyBytes: body.length }));
+  });
+  assertEquals(output.connections[0].unpublished, { color: "blue" });
+  assertEquals(output.available[0].flags, [true, null]);
+  assertEquals(output.truncated, false);
+});
+
+Deno.test("provider relay fixes the destination, encodes identity, preserves bytes, and sends no token", async () => {
+  const providerBody = new Uint8Array([0, 255, 3]);
+  const result = await relayGateway(ctx, {
+    provider: "custom/api",
+    connection_id: "id one",
+    providerPath: "/v2/items?q=a",
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-provider-option": "yes",
+    },
+    input: { kind: "base64", base64: providerBody.toBase64() },
+  }, (_ctx, request) => {
+    assertEquals(
+      request.path,
+      "/v1/gateway/custom%2Fapi/id%20one/v2/items?q=a",
+    );
+    assertEquals(request.method, "POST");
+    assertEquals(request.headers, {
+      "content-type": "application/octet-stream",
+      "x-provider-option": "yes",
+    });
+    assertEquals("authorization" in request.headers, false);
+    assertEquals(request.body, providerBody);
+    return Promise.resolve(
+      response({
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "retry-after": ["2"] },
+        body: new Uint8Array([7]),
+        bodyBytes: 1,
+      }),
+    );
+  });
+  assertEquals(result.status, 429);
+  assertEquals(result.body, new Uint8Array([7]));
+});
+
+Deno.test("relay rejects credential, routing, and Fly identity headers before transport", async () => {
+  for (
+    const header of [
+      "Authorization",
+      "Cookie",
+      "Proxy-Authorization",
+      "Host",
+      "Content-Length",
+      "Fly-Src-Signature",
+    ]
+  ) {
+    let called = false;
+    const error = await assertRejects(() =>
+      relayGateway(ctx, {
+        provider: "slack",
+        connection_id: "c1",
+        providerPath: "/chat.postMessage",
+        method: "POST",
+        headers: { [header]: "forbidden" },
+      }, () => {
+        called = true;
+        return Promise.resolve(response());
+      }), Error);
+    assertStringIncludes(error.message, "controlled");
+    assertEquals(called, false);
+  }
+  for (
+    const providerPath of [
+      "//other.example/path",
+      "/../../v1/sprites",
+      "/%2e%2e/admin",
+    ]
+  ) {
+    await assertRejects(() =>
+      relayGateway(ctx, {
+        provider: "slack",
+        connection_id: "c1",
+        providerPath,
+        method: "GET",
+      }, () => Promise.resolve(response())), Error);
+  }
+});
+
+Deno.test("requestGateway pins proxy target and validated TLS without forwarding bearer auth", async () => {
+  const raw = new PassThrough();
+  const secure = new PassThrough() as unknown as tls.TLSSocket;
+  Object.defineProperty(secure, "authorized", { value: true });
+  let tlsOptions: tls.ConnectionOptions | undefined;
+  let requestOptions: https.RequestOptions | undefined;
+  const resultPromise = requestGateway(ctx, {
+    method: "GET",
+    path: "/v1/gateway/list",
+    headers: { accept: "application/json" },
+    body: new Uint8Array(),
+  }, {
+    connect: (_ctx, host, port) => {
+      assertEquals({ host, port }, { host: "api.sprites.dev", port: 443 });
+      return Promise.resolve(raw);
+    },
+    connectTls: ((options: tls.ConnectionOptions) => {
+      tlsOptions = options;
+      queueMicrotask(() => secure.emit("secureConnect"));
+      return secure;
+    }) as typeof tls.connect,
+    request: ((
+      options: https.RequestOptions,
+      callback: (message: unknown) => void,
+    ) => {
+      requestOptions = options;
+      const outgoing = new EventEmitter() as EventEmitter & {
+        end(data: Uint8Array): void;
+        destroy(): void;
+      };
+      outgoing.end = () =>
+        queueMicrotask(() => {
+          const incoming = Readable.from([new Uint8Array([1, 2])]) as
+            & Readable
+            & {
+              statusCode: number;
+              statusMessage: string;
+              rawHeaders: string[];
+            };
+          incoming.statusCode = 503;
+          incoming.statusMessage = "Unavailable";
+          incoming.rawHeaders = ["X-Test", "one", "X-Test", "two"];
+          callback(incoming);
+        });
+      outgoing.destroy = () => {};
+      return outgoing;
+    }) as unknown as typeof https.request,
+  });
+  const result = await resultPromise;
+  assertEquals(tlsOptions?.servername, "api.sprites.dev");
+  assertEquals(tlsOptions?.rejectUnauthorized, true);
+  assertEquals(typeof tlsOptions?.checkServerIdentity, "function");
+  assertEquals(requestOptions?.hostname, "api.sprites.dev");
+  assertEquals(requestOptions?.headers, { accept: "application/json" });
+  assertEquals(result.status, 503);
+  assertEquals(result.headers, { "x-test": ["one", "two"] });
+  assertEquals(result.body, new Uint8Array([1, 2]));
+});
+
+Deno.test("gateway exports compose exact methods, resources, and binary file", () => {
+  assertEquals(Object.keys(gatewayMethods), ["gatewayList", "gatewayRequest"]);
+  assertEquals(Object.keys(gatewayResources), [
+    "gatewayConnections",
+    "gatewayResponse",
+  ]);
+  assertEquals(Object.keys(gatewayFiles), ["gatewayBody"]);
+});

@@ -11,11 +11,14 @@ A monorepo for custom [Swamp](https://github.com/swamp-club/swamp) extensions ma
   deno.json
   deno.lock
   README.md
-  LICENSE.md
+  LICENSE
   extensions/
     models/
       *.ts
       *_test.ts
+      _lib/
+        *.ts
+        *_test.ts
 ```
 
 The first package is [`@josh/sprites`](sprites/README.md), which integrates Fly.io Sprites. Unrelated extensions belong in sibling package directories.

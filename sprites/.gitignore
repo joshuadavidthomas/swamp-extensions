@@ -1,0 +1,19 @@
+# BEGIN swamp managed section - DO NOT EDIT
+
+# Runtime data (not needed in version control)
+.swamp/
+
+# Local extension sources (developer-specific, not shared)
+.swamp-sources.yaml
+# END swamp managed section
+
+node_modules/
+
+# Local resource and vault definitions belong to the operator, not this package.
+/models/
+/vaults/
+
+# Swamp repo artifacts belong to the developer's checkout, not the package.
+.swamp.yaml
+.pi/
+AGENTS.md

@@ -1,0 +1,940 @@
+// SPDX-License-Identifier: MIT
+/** Typed JSON, binary, and NDJSON methods for one Sprite. @module */
+import { z } from "zod";
+import { createHash } from "node:crypto";
+import {
+  Acknowledgement,
+  ApiError,
+  BinaryFile,
+  emptyRequest,
+  jsonRequest,
+  method as coreMethod,
+  ndjson,
+  request,
+  resource,
+  responseBytes,
+  segment,
+} from "./core.ts";
+import {
+  type SpriteContext,
+  spritePath,
+  SpriteResponse,
+  verifySprite,
+} from "./sprite-api.ts";
+
+function method<A extends z.ZodType, O extends z.ZodObject>(
+  description: string,
+  args: A,
+  spec: string,
+  output: O,
+  run: (args: z.output<A>, ctx: SpriteContext) => Promise<z.input<O>>,
+) {
+  return coreMethod<A, O, SpriteContext["globalArgs"]>(
+    description,
+    args,
+    spec,
+    output,
+    run,
+  );
+}
+
+const Empty = z.object({});
+const UpgradeRequested = z.object({
+  accepted: z.literal(true),
+  requestedVersion: z.string().min(1).optional(),
+});
+const RestartRequested = z.object({ accepted: z.literal(true) });
+const UrlProbe = z.object({
+  status: z.literal(200),
+  bodyBytes: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+const Name = z.string().min(1);
+const Environment = z.record(z.string(), z.string()).meta({ sensitive: true });
+const RequestUrlSettings = z.object({
+  auth: z.enum(["sprite", "public"]).optional(),
+  private_access: z.enum(["admins", "org_users"]).optional(),
+});
+const SpriteConfig = z.object({
+  ram_mb: z.number().positive().optional(),
+  cpus: z.number().positive().optional(),
+  region: z.string().min(1).optional(),
+  storage_gb: z.number().positive().optional(),
+});
+const CreateArgs = z.object({
+  config: SpriteConfig.optional(),
+  environment: Environment.optional(),
+  url_settings: RequestUrlSettings.optional(),
+  labels: z.array(z.string()).optional(),
+  wait_for_capacity: z.boolean().optional(),
+  runtime: z.enum(["default", "dev"]).optional(),
+});
+const UpdateArgs = z.object({
+  url_settings: RequestUrlSettings.optional(),
+  labels: z.array(z.string()).optional(),
+}).refine(
+  (value) => value.url_settings !== undefined || value.labels !== undefined,
+  {
+    message: "Provide url_settings or labels.",
+  },
+);
+
+const Checkpoint = z.object({
+  id: z.string(),
+  create_time: z.iso.datetime({ offset: true }),
+  comment: z.string().optional(),
+  health: z.string().optional(),
+  source_id: z.string().optional(),
+});
+const CheckpointEvent = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("info"),
+    data: z.string(),
+    time: z.iso.datetime({ offset: true }),
+  }),
+  z.object({
+    type: z.literal("complete"),
+    data: z.string(),
+    time: z.iso.datetime({ offset: true }),
+  }),
+  z.object({
+    type: z.literal("error"),
+    error: z.string(),
+    time: z.iso.datetime({ offset: true }),
+  }),
+]);
+const CheckpointEvents = z.object({
+  events: z.array(CheckpointEvent),
+  truncated: z.literal(false),
+});
+const Checkpoints = z.object({
+  checkpoints: z.array(Checkpoint),
+  truncated: z.literal(false),
+});
+
+const NetworkRule = z.object({
+  domain: z.string().optional(),
+  action: z.enum(["allow", "deny"]).optional(),
+  include: z.string().optional(),
+}).refine(
+  (rule) => !(rule.domain !== undefined && rule.include !== undefined),
+  {
+    message: "A network rule cannot contain both domain and include.",
+  },
+);
+const NetworkPolicy = z.object({ rules: z.array(NetworkRule) });
+const PrivilegesPolicy = z.object({
+  profile: z.enum(["", "minimal", "standard", "privileged"]).optional(),
+  devices: z.array(z.string()).optional(),
+  noNewPrivileges: z.boolean().optional(),
+});
+const ResourcesPolicy = z.object({
+  memory: z.object({
+    limit_mb: z.number().positive(),
+    autoscale: z.boolean().optional(),
+  }).optional(),
+});
+
+const ServiceState = z.object({
+  name: z.string(),
+  status: z.enum(["stopped", "starting", "running", "stopping", "failed"]),
+  pid: z.number().int().optional(),
+  started_at: z.string().optional(),
+  error: z.string().optional(),
+  restart_count: z.number().int().nonnegative().optional(),
+  next_restart_at: z.string().optional(),
+});
+export const Service = z.object({
+  name: z.string(),
+  cmd: z.string(),
+  args: z.array(z.string()).nullable(),
+  env: Environment.optional(),
+  dir: z.string().optional(),
+  needs: z.array(z.string()).nullable(),
+  http_port: z.number().int().nullable().optional(),
+  state: ServiceState.nullish(),
+});
+const ServiceRequest = z.object({
+  cmd: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  env: Environment.optional(),
+  dir: z.string().optional(),
+  needs: z.array(z.string()).default([]),
+  http_port: z.number().int().nullable().optional(),
+});
+const Timestamp = z.number().int();
+const ServiceEvent = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("stdout"),
+    data: z.string().meta({ sensitive: true }),
+    timestamp: Timestamp,
+  }),
+  z.object({
+    type: z.literal("stderr"),
+    data: z.string().meta({ sensitive: true }),
+    timestamp: Timestamp,
+  }),
+  z.object({
+    type: z.literal("error"),
+    data: z.string().meta({ sensitive: true }),
+    timestamp: Timestamp,
+  }),
+  z.object({
+    type: z.literal("exit"),
+    exit_code: z.number().int(),
+    timestamp: Timestamp,
+  }),
+  z.object({ type: z.literal("started"), timestamp: Timestamp }),
+  z.object({ type: z.literal("stopping"), timestamp: Timestamp }),
+  z.object({
+    type: z.literal("stopped"),
+    exit_code: z.number().int(),
+    timestamp: Timestamp,
+  }),
+  z.object({
+    type: z.literal("complete"),
+    timestamp: Timestamp,
+    log_files: z.record(z.string(), z.string()).optional(),
+  }),
+]);
+const Services = z.object({
+  services: z.array(Service),
+  truncated: z.literal(false),
+});
+const ServiceEvents = z.object({
+  events: z.array(ServiceEvent),
+  truncated: z.boolean().describe(
+    "True for a requested log tail or timed log observation; false for completed operation progress.",
+  ),
+});
+
+const WorkingPath = z.object({
+  path: z.string().min(1),
+  workingDir: z.string().min(1).default("/"),
+});
+const FsEntry = z.object({
+  name: z.string(),
+  path: z.string(),
+  type: z.string(),
+  size: z.number().int(),
+  mode: z.string(),
+  modTime: z.iso.datetime({ offset: true }),
+  isDir: z.boolean(),
+});
+const ApiFsList = z.object({
+  path: z.string(),
+  entries: z.array(FsEntry),
+  count: z.number().int().nonnegative(),
+});
+const FsList = ApiFsList.extend({ truncated: z.literal(false) });
+const FsWrite = z.object({
+  path: z.string(),
+  size: z.number().int().nonnegative(),
+  mode: z.string(),
+});
+const FsDelete = z.object({
+  deleted: z.array(z.string()),
+  count: z.number().int().nonnegative(),
+});
+const FsCopy = z.object({
+  copied: z.array(z.object({ source: z.string(), dest: z.string() })),
+  count: z.number().int().nonnegative(),
+  totalBytes: z.number().int().nonnegative(),
+});
+const FsRename = z.object({ source: z.string(), dest: z.string() });
+const FsChmod = z.object({
+  affected: z.array(z.object({ path: z.string(), mode: z.string() })),
+  count: z.number().int().nonnegative(),
+});
+const FsChown = z.object({
+  affected: z.array(
+    z.object({
+      path: z.string(),
+      uid: z.number().int(),
+      gid: z.number().int(),
+    }),
+  ),
+  count: z.number().int().nonnegative(),
+});
+const CommonMutation = z.object({
+  workingDir: z.string().min(1).default("/"),
+  recursive: z.boolean().default(false),
+  asRoot: z.boolean().default(false),
+});
+const FileContent = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("text"), text: z.string() }),
+  z.object({ kind: z.literal("base64"), base64: z.base64() }),
+]);
+
+function checkpointPath(ctx: SpriteContext, id: string): string {
+  return spritePath(ctx, `/checkpoints/${segment(id)}`);
+}
+function servicePath(ctx: SpriteContext, name: string, suffix = ""): string {
+  return spritePath(ctx, `/services/${segment(name)}${suffix}`);
+}
+function fsPath(ctx: SpriteContext, operation: string): string {
+  return spritePath(ctx, `/fs/${operation}`);
+}
+function requireComplete<T extends { type: string }>(
+  events: T[],
+  operation: string,
+): T[] {
+  if (!events.some((event) => event.type === "complete")) {
+    throw new Error(
+      `Sprites ${operation} progress ended without a complete event; no output was saved.`,
+    );
+  }
+  return events;
+}
+async function checkpointStream(
+  ctx: SpriteContext,
+  methodName: string,
+  path: string,
+  json?: unknown,
+): Promise<z.input<typeof CheckpointEvents>> {
+  const events = await ndjson(
+    ctx,
+    methodName,
+    path,
+    CheckpointEvent,
+    json === undefined ? {} : { json },
+  );
+  return { events: requireComplete(events, path), truncated: false };
+}
+async function serviceStream(
+  ctx: SpriteContext,
+  methodName: string,
+  path: string,
+  options: NonNullable<Parameters<typeof ndjson>[4]> = {},
+  starting = false,
+): Promise<z.input<typeof ServiceEvents>> {
+  const events = await ndjson(ctx, methodName, path, ServiceEvent, options);
+  if (starting) {
+    const exited = events.find((event) => event.type === "exit");
+    if (exited?.type === "exit") {
+      throw new Error(
+        `Sprite service exited during startup with code ${exited.exit_code}; inspect its service logs before retrying.`,
+      );
+    }
+  }
+  return {
+    events: requireComplete(events, path),
+    truncated: path.endsWith("/logs"),
+  };
+}
+function contentBytes(
+  content: z.output<typeof FileContent>,
+): Uint8Array {
+  return content.kind === "text"
+    ? new TextEncoder().encode(content.text)
+    : Uint8Array.fromBase64(content.base64);
+}
+async function verifiedEmpty(
+  ctx: SpriteContext,
+  httpMethod: string,
+  path: string,
+  options: Parameters<typeof emptyRequest>[3] = {},
+): Promise<z.input<typeof Acknowledgement>> {
+  await verifySprite(ctx);
+  await emptyRequest(ctx, httpMethod, path, options);
+  return { completed: true };
+}
+
+/** JSON resources emitted by REST methods. Provider field names remain unchanged. */
+export const restResources = {
+  state: resource(SpriteResponse, "Current provider metadata for this Sprite"),
+  deleted: resource(Acknowledgement, "Sprite deletion acknowledgement"),
+  upgradeRequested: resource(
+    UpgradeRequested,
+    "Provider acknowledgement that it accepted a runtime upgrade request",
+  ),
+  restartRequested: resource(
+    RestartRequested,
+    "Provider machine restart acknowledgement",
+  ),
+  urlProbe: resource(
+    UrlProbe,
+    "Authenticated root URL response fingerprint; not a general application health guarantee",
+    "7d",
+  ),
+  checkpointCreated: resource(CheckpointEvents, "Checkpoint creation progress"),
+  checkpoints: resource(Checkpoints, "Sprite checkpoints"),
+  checkpoint: resource(Checkpoint, "One Sprite checkpoint"),
+  checkpointRestored: resource(
+    CheckpointEvents,
+    "Checkpoint restoration progress",
+  ),
+  networkPolicy: resource(NetworkPolicy, "Sprite network policy"),
+  networkPolicySet: resource(
+    Acknowledgement,
+    "Network policy update acknowledgement",
+  ),
+  privilegesPolicy: resource(PrivilegesPolicy, "Sprite privilege policy"),
+  privilegesPolicySet: resource(
+    Acknowledgement,
+    "Privilege policy update acknowledgement",
+  ),
+  privilegesPolicyDeleted: resource(
+    Acknowledgement,
+    "Privilege policy deletion acknowledgement",
+  ),
+  resourcesPolicy: resource(ResourcesPolicy, "Sprite resource policy"),
+  resourcesPolicySet: resource(
+    Acknowledgement,
+    "Resource policy update acknowledgement",
+  ),
+  resourcesPolicyDeleted: resource(
+    Acknowledgement,
+    "Resource policy deletion acknowledgement",
+  ),
+  services: resource(Services, "Configured Sprite services"),
+  service: resource(Service, "One configured Sprite service"),
+  servicePut: resource(
+    ServiceEvents,
+    "Service create or update progress",
+    "7d",
+  ),
+  serviceLogs: resource(ServiceEvents, "Service log stream", "7d"),
+  serviceStarted: resource(ServiceEvents, "Service start progress", "7d"),
+  serviceStopped: resource(ServiceEvents, "Service stop progress", "7d"),
+  serviceRestarted: resource(ServiceEvents, "Service restart progress", "7d"),
+  serviceDeleted: resource(Acknowledgement, "Service deletion acknowledgement"),
+  files: resource(FsList, "Native filesystem directory listing"),
+  fileWritten: resource(FsWrite, "Native filesystem write result"),
+  fileDeleted: resource(FsDelete, "Native filesystem deletion result"),
+  fileCopied: resource(FsCopy, "Native filesystem copy result"),
+  fileRenamed: resource(FsRename, "Native filesystem rename result"),
+  fileModeChanged: resource(FsChmod, "Native filesystem chmod result"),
+  fileOwnerChanged: resource(FsChown, "Native filesystem chown result"),
+};
+
+/** Binary outputs emitted by REST methods. */
+export const restFiles = { contents: BinaryFile };
+
+/** Complete non-WebSocket REST method set for one Sprite. */
+export const restMethods = {
+  create: method(
+    "Create the configured Sprite",
+    CreateArgs,
+    "state",
+    SpriteResponse,
+    async (args, ctx) =>
+      await jsonRequest(ctx, "POST", "/v1/sprites", SpriteResponse, {
+        json: { name: ctx.globalArgs.name, ...args },
+      }),
+  ),
+  lookup: method(
+    "Read the configured Sprite",
+    Empty,
+    "state",
+    SpriteResponse,
+    async (_args, ctx) =>
+      await jsonRequest(ctx, "GET", spritePath(ctx), SpriteResponse),
+  ),
+  update: method(
+    "Update the configured Sprite",
+    UpdateArgs,
+    "state",
+    SpriteResponse,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await jsonRequest(ctx, "PUT", spritePath(ctx), SpriteResponse, {
+        json: args,
+      });
+    },
+  ),
+  upgrade: method(
+    "Request a runtime upgrade; success only acknowledges provider acceptance",
+    z.object({ version: z.string().min(1).optional() }),
+    "upgradeRequested",
+    UpgradeRequested,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      await emptyRequest(
+        ctx,
+        "POST",
+        spritePath(ctx, "/upgrade"),
+        args.version === undefined ? {} : { json: { version: args.version } },
+      );
+      return args.version === undefined
+        ? { accepted: true as const }
+        : { accepted: true as const, requestedVersion: args.version };
+    },
+  ),
+  restart: method(
+    "Request a restart of the machine backing this Sprite",
+    Empty,
+    "restartRequested",
+    RestartRequested,
+    async (_args, ctx) => {
+      await verifySprite(ctx);
+      await emptyRequest(ctx, "POST", spritePath(ctx, "/restart"));
+      return { accepted: true as const };
+    },
+  ),
+  probeUrl: method(
+    "Check the verified Sprite root URL and fingerprint its response",
+    Empty,
+    "urlProbe",
+    UrlProbe,
+    async (_args, ctx) => {
+      const deadline = performance.now() + ctx.globalArgs.timeoutMs;
+      const signal = AbortSignal.any([
+        ctx.signal,
+        AbortSignal.timeout(ctx.globalArgs.timeoutMs),
+      ]);
+      const state = await verifySprite({ ...ctx, signal });
+      const url = new URL(state.url);
+      if (
+        url.protocol !== "https:" || !url.hostname.endsWith(".sprites.app") ||
+        !url.hostname.startsWith(`${ctx.globalArgs.name}-`) || url.username ||
+        url.password || url.port || url.pathname !== "/" || url.search ||
+        url.hash
+      ) {
+        throw new Error(
+          "Sprite URL is not an expected provider-owned root URL; no credential was sent to it.",
+        );
+      }
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${ctx.globalArgs.token}` },
+        redirect: "error",
+        signal,
+      });
+      if (response.status !== 200) {
+        await response.body?.cancel();
+        throw new Error(`Sprite URL probe returned HTTP ${response.status}.`);
+      }
+      const bytes = await responseBytes(
+        response,
+        ctx.globalArgs.maxResponseBytes,
+      );
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      signal.throwIfAborted();
+      if (performance.now() >= deadline) {
+        throw new Error(
+          "Sprite URL probe exceeded timeoutMs.",
+        );
+      }
+      return {
+        status: 200 as const,
+        bodyBytes: bytes.length,
+        sha256: digest,
+      };
+    },
+  ),
+  delete: method(
+    "Delete the configured Sprite",
+    Empty,
+    "deleted",
+    Acknowledgement,
+    async (_args, ctx) => {
+      try {
+        await verifySprite(ctx);
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 404)) throw error;
+        await ctx.deleteResource("state");
+        return { completed: true as const };
+      }
+      try {
+        await emptyRequest(ctx, "DELETE", spritePath(ctx));
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 404)) throw error;
+      }
+      await ctx.deleteResource("state");
+      return { completed: true as const };
+    },
+  ),
+
+  createCheckpoint: method(
+    "Create a Sprite checkpoint",
+    z.object({ comment: z.string().optional() }),
+    "checkpointCreated",
+    CheckpointEvents,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await checkpointStream(
+        ctx,
+        "POST",
+        spritePath(ctx, "/checkpoint"),
+        args,
+      );
+    },
+  ),
+  listCheckpoints: method(
+    "List Sprite checkpoints",
+    Empty,
+    "checkpoints",
+    Checkpoints,
+    async (_args, ctx) => ({
+      checkpoints: await jsonRequest(
+        ctx,
+        "GET",
+        spritePath(ctx, "/checkpoints"),
+        z.array(Checkpoint),
+      ),
+      truncated: false as const,
+    }),
+  ),
+  getCheckpoint: method(
+    "Read a Sprite checkpoint",
+    z.object({ checkpoint_id: Name }),
+    "checkpoint",
+    Checkpoint,
+    async (args, ctx) =>
+      await jsonRequest(
+        ctx,
+        "GET",
+        checkpointPath(ctx, args.checkpoint_id),
+        Checkpoint,
+      ),
+  ),
+  restoreCheckpoint: method(
+    "Restore a Sprite checkpoint",
+    z.object({ checkpoint_id: Name }),
+    "checkpointRestored",
+    CheckpointEvents,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await checkpointStream(
+        ctx,
+        "POST",
+        `${checkpointPath(ctx, args.checkpoint_id)}/restore`,
+      );
+    },
+  ),
+
+  getNetworkPolicy: method(
+    "Read the Sprite network policy",
+    Empty,
+    "networkPolicy",
+    NetworkPolicy,
+    async (_args, ctx) =>
+      await jsonRequest(
+        ctx,
+        "GET",
+        spritePath(ctx, "/policy/network"),
+        NetworkPolicy,
+      ),
+  ),
+  setNetworkPolicy: method(
+    "Replace the Sprite network policy",
+    NetworkPolicy,
+    "networkPolicySet",
+    Acknowledgement,
+    async (args, ctx) =>
+      await verifiedEmpty(ctx, "POST", spritePath(ctx, "/policy/network"), {
+        json: args,
+      }),
+  ),
+  getPrivilegesPolicy: method(
+    "Read the Sprite privilege policy",
+    Empty,
+    "privilegesPolicy",
+    PrivilegesPolicy,
+    async (_args, ctx) =>
+      await jsonRequest(
+        ctx,
+        "GET",
+        spritePath(ctx, "/policy/privileges"),
+        PrivilegesPolicy,
+      ),
+  ),
+  setPrivilegesPolicy: method(
+    "Set the Sprite privilege policy",
+    PrivilegesPolicy,
+    "privilegesPolicySet",
+    Acknowledgement,
+    async (args, ctx) =>
+      await verifiedEmpty(ctx, "POST", spritePath(ctx, "/policy/privileges"), {
+        json: args,
+      }),
+  ),
+  deletePrivilegesPolicy: method(
+    "Remove the Sprite privilege policy",
+    Empty,
+    "privilegesPolicyDeleted",
+    Acknowledgement,
+    async (_args, ctx) =>
+      await verifiedEmpty(ctx, "DELETE", spritePath(ctx, "/policy/privileges")),
+  ),
+  getResourcesPolicy: method(
+    "Read the Sprite resource policy",
+    Empty,
+    "resourcesPolicy",
+    ResourcesPolicy,
+    async (_args, ctx) =>
+      await jsonRequest(
+        ctx,
+        "GET",
+        spritePath(ctx, "/policy/resources"),
+        ResourcesPolicy,
+      ),
+  ),
+  setResourcesPolicy: method(
+    "Set the Sprite resource policy",
+    ResourcesPolicy,
+    "resourcesPolicySet",
+    Acknowledgement,
+    async (args, ctx) =>
+      await verifiedEmpty(ctx, "POST", spritePath(ctx, "/policy/resources"), {
+        json: args,
+      }),
+  ),
+  deleteResourcesPolicy: method(
+    "Remove the Sprite resource policy",
+    Empty,
+    "resourcesPolicyDeleted",
+    Acknowledgement,
+    async (_args, ctx) =>
+      await verifiedEmpty(ctx, "DELETE", spritePath(ctx, "/policy/resources")),
+  ),
+
+  listServices: method(
+    "List configured Sprite services",
+    Empty,
+    "services",
+    Services,
+    async (_args, ctx) => ({
+      services: await jsonRequest(
+        ctx,
+        "GET",
+        spritePath(ctx, "/services"),
+        z.array(Service),
+      ),
+      truncated: false as const,
+    }),
+  ),
+  putService: method(
+    "Create or update a Sprite service",
+    z.object({
+      service_name: Name,
+      service: ServiceRequest,
+      duration: z.string().min(1).optional(),
+    }),
+    "servicePut",
+    ServiceEvents,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await serviceStream(
+        ctx,
+        "PUT",
+        servicePath(ctx, args.service_name),
+        { query: { duration: args.duration }, json: args.service },
+        true,
+      );
+    },
+  ),
+  getServiceLogs: method(
+    "Read a Sprite service log stream",
+    z.object({
+      service_name: Name,
+      lines: z.number().int().nonnegative().optional(),
+      duration: z.string().min(1).optional(),
+    }),
+    "serviceLogs",
+    ServiceEvents,
+    async (args, ctx) =>
+      await serviceStream(
+        ctx,
+        "GET",
+        servicePath(ctx, args.service_name, "/logs"),
+        { query: { lines: args.lines, duration: args.duration } },
+      ),
+  ),
+  startService: method(
+    "Start a Sprite service",
+    z.object({ service_name: Name, duration: z.string().min(1).optional() }),
+    "serviceStarted",
+    ServiceEvents,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await serviceStream(
+        ctx,
+        "POST",
+        servicePath(ctx, args.service_name, "/start"),
+        { query: { duration: args.duration } },
+        true,
+      );
+    },
+  ),
+  stopService: method(
+    "Stop a Sprite service",
+    z.object({ service_name: Name, timeout: z.string().min(1).optional() }),
+    "serviceStopped",
+    ServiceEvents,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await serviceStream(
+        ctx,
+        "POST",
+        servicePath(ctx, args.service_name, "/stop"),
+        { query: { timeout: args.timeout } },
+      );
+    },
+  ),
+  restartService: method(
+    "Restart a Sprite service",
+    z.object({ service_name: Name, duration: z.string().min(1).optional() }),
+    "serviceRestarted",
+    ServiceEvents,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await serviceStream(
+        ctx,
+        "POST",
+        servicePath(ctx, args.service_name, "/restart"),
+        { query: { duration: args.duration } },
+        true,
+      );
+    },
+  ),
+  deleteService: method(
+    "Delete a Sprite service",
+    z.object({ service_name: Name }),
+    "serviceDeleted",
+    Acknowledgement,
+    async (args, ctx) =>
+      await verifiedEmpty(ctx, "DELETE", servicePath(ctx, args.service_name)),
+  ),
+
+  listFiles: method(
+    "List a Sprite directory",
+    WorkingPath.extend({
+      recursive: z.boolean().optional(),
+      pattern: z.string().optional(),
+    }),
+    "files",
+    FsList,
+    async (args, ctx) => ({
+      ...await jsonRequest(ctx, "GET", fsPath(ctx, "list"), ApiFsList, {
+        query: args,
+      }),
+      truncated: false as const,
+    }),
+  ),
+  readFile: {
+    description: "Read raw bytes from a Sprite file",
+    arguments: WorkingPath,
+    execute: async (
+      input: z.output<typeof WorkingPath>,
+      ctx: SpriteContext,
+    ) => {
+      const args = WorkingPath.parse(input);
+      ctx.logger.info("Reading Sprite file");
+      const response = await request(ctx, "GET", fsPath(ctx, "read"), {
+        query: args,
+      });
+      const bytes = await responseBytes(
+        response,
+        ctx.globalArgs.maxResponseBytes,
+      );
+      ctx.signal.throwIfAborted();
+      const handle = await ctx.createFileWriter("contents", "contents")
+        .writeAll(bytes);
+      ctx.logger.info("Read Sprite file", { bytes: bytes.length });
+      return { dataHandles: [handle] };
+    },
+  },
+  writeFile: method(
+    "Write raw bytes to a Sprite file",
+    WorkingPath.extend({
+      content: FileContent.meta({ sensitive: true }),
+      mode: z.string().regex(/^[0-7]{3,4}$/).optional(),
+      // The live OpenAPI calls this query parameter mkdir; older SDKs used mkdirParents.
+      mkdir: z.boolean().optional(),
+    }),
+    "fileWritten",
+    FsWrite,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      const bytes = contentBytes(args.content);
+      return await jsonRequest(ctx, "PUT", fsPath(ctx, "write"), FsWrite, {
+        query: {
+          path: args.path,
+          workingDir: args.workingDir,
+          mode: args.mode,
+          mkdir: args.mkdir,
+        },
+        bytes,
+        headers: { "content-type": "application/octet-stream" },
+      });
+    },
+  ),
+  deleteFile: method(
+    "Delete a Sprite file or directory",
+    WorkingPath.merge(CommonMutation),
+    "fileDeleted",
+    FsDelete,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await jsonRequest(ctx, "DELETE", fsPath(ctx, "delete"), FsDelete, {
+        json: args,
+      });
+    },
+  ),
+  copyFile: method(
+    "Copy a Sprite file or directory",
+    z.object({
+      source: Name,
+      dest: Name,
+      preserveAttrs: z.boolean().default(false),
+    }).merge(CommonMutation),
+    "fileCopied",
+    FsCopy,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await jsonRequest(ctx, "POST", fsPath(ctx, "copy"), FsCopy, {
+        json: args,
+      });
+    },
+  ),
+  renameFile: method(
+    "Rename a Sprite file or directory",
+    z.object({
+      source: Name,
+      dest: Name,
+      workingDir: z.string().min(1).default("/"),
+      asRoot: z.boolean().default(false),
+    }),
+    "fileRenamed",
+    FsRename,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await jsonRequest(ctx, "POST", fsPath(ctx, "rename"), FsRename, {
+        json: args,
+      });
+    },
+  ),
+  chmodFile: method(
+    "Change Sprite file permissions",
+    WorkingPath.merge(CommonMutation).extend({
+      mode: z.string().regex(/^[0-7]{3,4}$/),
+    }),
+    "fileModeChanged",
+    FsChmod,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await jsonRequest(ctx, "POST", fsPath(ctx, "chmod"), FsChmod, {
+        json: args,
+      });
+    },
+  ),
+  chownFile: method(
+    "Change Sprite file ownership",
+    WorkingPath.merge(CommonMutation).extend({
+      uid: z.number().int().nonnegative().optional(),
+      gid: z.number().int().nonnegative().optional(),
+    }).refine((value) => value.uid !== undefined || value.gid !== undefined, {
+      message: "Provide uid or gid.",
+    }),
+    "fileOwnerChanged",
+    FsChown,
+    async (args, ctx) => {
+      await verifySprite(ctx);
+      return await jsonRequest(ctx, "POST", fsPath(ctx, "chown"), FsChown, {
+        json: args,
+      });
+    },
+  ),
+};
