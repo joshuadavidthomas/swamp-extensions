@@ -156,7 +156,7 @@ async function replacePolicy(
 /** Complete organization-scoped Sprites connector collection model. */
 export const model = {
   type: "@josh/sprites/connectors",
-  version: "2026.09.09.1",
+  version: "2026.09.10.1",
   globalArguments: AuthSchema,
   resources: {
     connection: resource(

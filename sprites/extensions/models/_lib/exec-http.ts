@@ -242,5 +242,5 @@ export function decodeStreamFrame(frame: Uint8Array):
   if (frame[0] === 3 && frame.length === 2) {
     return { kind: "exit", code: frame[1] };
   }
-  throw new Error("HTTP exec returned an invalid stream frame.");
+  throw new Error("Sprite exec stream returned an invalid frame.");
 }

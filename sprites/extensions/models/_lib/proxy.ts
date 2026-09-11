@@ -367,9 +367,7 @@ async function runConnection(
   let tunnel: Duplex | undefined;
   let socketClosed = false;
   let socketFailed = false;
-  let localEnded = false;
   let remoteEnded = false;
-  let cleanupCause = "connection-cleanup";
   type ConnectionOutcome =
     | { kind: "clean-remote-eof" | "client-close" }
     | { kind: "error"; error: Error };
@@ -385,7 +383,6 @@ async function runConnection(
   };
   const onSocketError = (error: Error): void => {
     socketFailed = true;
-    cleanupCause = "client-error";
     connectionLifetime.abort(error);
     finishConnection({ kind: "error", error });
   };
@@ -395,7 +392,6 @@ async function runConnection(
       connectionLifetime.abort(new Error("Loopback TCP client closed."));
     }
     if (socketFailed) return;
-    cleanupCause = remoteEnded ? "clean-remote-eof" : "client-close";
     finishConnection({
       kind: remoteEnded ? "clean-remote-eof" : "client-close",
     });
@@ -404,7 +400,6 @@ async function runConnection(
     bytesFromClients += chunk.length;
   };
   const onSocketEnd = (): void => {
-    localEnded = true;
     if (phase === "pending") socket.destroy();
   };
   // Install these before starting the remote handshake: paused sockets can
@@ -435,10 +430,8 @@ async function runConnection(
           socketClosed && !socketFailed &&
           !ctx.signal.aborted
         ) {
-          cleanupCause = "client-close-during-handshake";
           return { bytesFromClients, bytesFromRemote };
         }
-        cleanupCause = "handshake-error";
         throw error;
       }
       phase = "established";
@@ -447,14 +440,12 @@ async function runConnection(
       };
       onTunnelEnd = (): void => {
         remoteEnded = true;
-        cleanupCause = "remote-eof-draining-local-socket";
         if (socketClosed) {
           finishConnection({ kind: "clean-remote-eof" });
         }
       };
       onTunnelClose = (): void => {
         if (remoteEnded || socketClosed || outcome) return;
-        cleanupCause = "premature-tunnel-close";
         finishConnection({
           kind: "error",
           error: new Error(
@@ -463,7 +454,6 @@ async function runConnection(
         });
       };
       onTunnelError = (error: Error): void => {
-        cleanupCause = "tunnel-error";
         finishConnection({ kind: "error", error });
       };
       tunnel.on("data", onTunnelData);
@@ -497,13 +487,6 @@ async function runConnection(
       }
       socket.destroy();
       tunnel?.destroy();
-      ctx.logger.info("TCP proxy connection cleanup finished", {
-        phase,
-        cleanupCause,
-        localEnd: localEnded,
-        remoteEof: remoteEnded,
-        socketClosed,
-      });
     }
   } catch (error) {
     if (!(durationEnded() && phase === "established")) throw error;

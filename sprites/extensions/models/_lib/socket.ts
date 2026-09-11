@@ -223,6 +223,5 @@ export async function readChannel(
         reject(error);
       },
     );
-    if (signal.aborted) onAbort();
   });
 }

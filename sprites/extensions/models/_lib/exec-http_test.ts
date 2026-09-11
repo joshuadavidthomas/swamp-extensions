@@ -19,7 +19,7 @@ Deno.test("decodeStreamFrame separates binary output and exit status and rejects
     assertThrows(
       () => decodeStreamFrame(new Uint8Array(frame)),
       Error,
-      "invalid stream frame",
+      "Sprite exec stream returned an invalid frame.",
     );
   }
 });

@@ -8,7 +8,6 @@ import { Service } from "./sprite-rest.ts";
 
 /** Native exec boundary; credentials stay on the outer TLS connection. */
 export type ManagementExec = typeof executeHttp;
-type ManagementContext = SpriteContext & { managementExec?: ManagementExec };
 const ManagementResourceName = z.string().min(1).max(256).refine(
   (name) => name !== "." && name !== "..",
   "A management resource name must not be a dot segment.",
@@ -56,9 +55,9 @@ type Request = {
 
 /** One socket request, never retried or redirected; failures never expose remote output. */
 async function send(
-  ctx: ManagementContext,
+  ctx: SpriteContext,
   request: Request,
-  execute: ManagementExec = ctx.managementExec ?? executeHttp,
+  execute: ManagementExec,
 ): Promise<string> {
   const operation = deadline(ctx);
   const bounded = { ...ctx, signal: operation.signal };
@@ -145,11 +144,16 @@ async function send(
 }
 
 const read = async <S extends z.ZodType>(
-  ctx: ManagementContext,
+  ctx: SpriteContext,
   path: Request["path"],
   schema: S,
+  execute: ManagementExec,
 ): Promise<z.output<S>> => {
-  const body = await send(ctx, { method: "GET", path, statuses: [200] });
+  const body = await send(
+    ctx,
+    { method: "GET", path, statuses: [200] },
+    execute,
+  );
   let value: unknown;
   try {
     value = JSON.parse(body);
@@ -162,118 +166,123 @@ const read = async <S extends z.ZodType>(
   }
   return parsed.data;
 };
-export const managementMethods = {
-  getService: method(
-    "Read a configured Sprite service through the Sprite management socket",
-    z.object({ service_name: ManagementResourceName }),
-    "service",
-    Service,
-    async (args, ctx: ManagementContext) => {
-      const service = await read(
-        ctx,
-        `/v1/services/${segment(args.service_name)}`,
-        Service,
-      );
-      if (service.name !== args.service_name) {
-        throw new Error(
-          "Sprite management returned a different service than requested.",
+/** Build management methods with an explicit native exec boundary. */
+export function createManagementMethods(execute: ManagementExec = executeHttp) {
+  return {
+    getService: method(
+      "Read a configured Sprite service through the Sprite management socket",
+      z.object({ service_name: ManagementResourceName }),
+      "service",
+      Service,
+      async (args, ctx: SpriteContext) => {
+        const service = await read(
+          ctx,
+          `/v1/services/${segment(args.service_name)}`,
+          Service,
+          execute,
         );
-      }
-      return service;
-    },
-  ),
-  signalService: method(
-    "Signal a service through the Sprite management socket",
-    z.object({
-      service_name: ManagementResourceName,
-      signal: z.string().min(1).max(32),
-    }),
-    "serviceSignaled",
-    null,
-    async (args, ctx: ManagementContext) => {
-      await send(ctx, {
-        method: "POST",
-        path: "/v1/services/signal",
-        body: { name: args.service_name, signal: args.signal },
-        statuses: [204],
-      });
-    },
-  ),
-  listTasks: method(
-    "List active task holds through the Sprite management socket",
-    z.object({}),
-    "tasks",
-    Tasks,
-    async (_args, ctx: ManagementContext) =>
-      await read(ctx, "/v1/tasks", Tasks),
-  ),
-  getTask: method(
-    "Read an active task hold",
-    z.object({ name: ManagementResourceName }),
-    "task",
-    Task,
-    async (args, ctx: ManagementContext) =>
-      await read(ctx, `/v1/tasks/${segment(args.name)}`, Task),
-  ),
-  createTask: method(
-    "Create a task hold; an existing name fails rather than being refreshed",
-    TaskArgs,
-    "taskCreated",
-    TaskArgs,
-    async (args, ctx: ManagementContext) => {
-      await send(ctx, {
-        method: "POST",
-        path: "/v1/tasks",
-        body: args,
-        statuses: [201],
-      });
-      return args;
-    },
-  ),
-  refreshTask: method(
-    "Refresh a named task hold, or create it if absent",
-    TaskArgs,
-    "taskRefreshed",
-    TaskArgs,
-    async (args, ctx: ManagementContext) => {
-      await send(ctx, {
-        method: "PUT",
-        path: `/v1/tasks/${segment(args.name)}`,
-        body: { expire: args.expire },
-        statuses: [200],
-      });
-      return args;
-    },
-  ),
-  putTask: method(
-    "Create or refresh a task hold through the collection PUT endpoint",
-    TaskArgs,
-    "taskPut",
-    TaskArgs,
-    async (args, ctx: ManagementContext) => {
-      await send(ctx, {
-        method: "PUT",
-        path: "/v1/tasks",
-        body: args,
-        statuses: [200],
-      });
-      return args;
-    },
-  ),
-  deleteTask: method(
-    "Release a task hold; an already absent task succeeds",
-    z.object({ name: ManagementResourceName }),
-    "taskDeleted",
-    null,
-    async (args, ctx: ManagementContext) => {
-      await send(ctx, {
-        method: "DELETE",
-        path: `/v1/tasks/${segment(args.name)}`,
-        statuses: [204, 404],
-      });
-    },
-  ),
-};
+        if (service.name !== args.service_name) {
+          throw new Error(
+            "Sprite management returned a different service than requested.",
+          );
+        }
+        return service;
+      },
+    ),
+    signalService: method(
+      "Signal a service through the Sprite management socket",
+      z.object({
+        service_name: ManagementResourceName,
+        signal: z.string().min(1).max(32),
+      }),
+      "serviceSignaled",
+      null,
+      async (args, ctx: SpriteContext) => {
+        await send(ctx, {
+          method: "POST",
+          path: "/v1/services/signal",
+          body: { name: args.service_name, signal: args.signal },
+          statuses: [204],
+        }, execute);
+      },
+    ),
+    listTasks: method(
+      "List active task holds through the Sprite management socket",
+      z.object({}),
+      "tasks",
+      Tasks,
+      async (_args, ctx: SpriteContext) =>
+        await read(ctx, "/v1/tasks", Tasks, execute),
+    ),
+    getTask: method(
+      "Read an active task hold",
+      z.object({ name: ManagementResourceName }),
+      "task",
+      Task,
+      async (args, ctx: SpriteContext) =>
+        await read(ctx, `/v1/tasks/${segment(args.name)}`, Task, execute),
+    ),
+    createTask: method(
+      "Create a task hold; an existing name fails rather than being refreshed",
+      TaskArgs,
+      "taskCreated",
+      TaskArgs,
+      async (args, ctx: SpriteContext) => {
+        await send(ctx, {
+          method: "POST",
+          path: "/v1/tasks",
+          body: args,
+          statuses: [201],
+        }, execute);
+        return args;
+      },
+    ),
+    refreshTask: method(
+      "Refresh a named task hold, or create it if absent",
+      TaskArgs,
+      "taskRefreshed",
+      TaskArgs,
+      async (args, ctx: SpriteContext) => {
+        await send(ctx, {
+          method: "PUT",
+          path: `/v1/tasks/${segment(args.name)}`,
+          body: { expire: args.expire },
+          statuses: [200],
+        }, execute);
+        return args;
+      },
+    ),
+    putTask: method(
+      "Create or refresh a task hold through the collection PUT endpoint",
+      TaskArgs,
+      "taskPut",
+      TaskArgs,
+      async (args, ctx: SpriteContext) => {
+        await send(ctx, {
+          method: "PUT",
+          path: "/v1/tasks",
+          body: args,
+          statuses: [200],
+        }, execute);
+        return args;
+      },
+    ),
+    deleteTask: method(
+      "Release a task hold; an already absent task succeeds",
+      z.object({ name: ManagementResourceName }),
+      "taskDeleted",
+      null,
+      async (args, ctx: SpriteContext) => {
+        await send(ctx, {
+          method: "DELETE",
+          path: `/v1/tasks/${segment(args.name)}`,
+          statuses: [204, 404],
+        }, execute);
+      },
+    ),
+  };
+}
+export const managementMethods = createManagementMethods();
 /** Local API observations expire; stored task snapshots do not imply a continuing hold. */
 export const managementResources = {
   tasks: resource(

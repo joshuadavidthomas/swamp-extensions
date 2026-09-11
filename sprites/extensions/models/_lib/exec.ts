@@ -380,12 +380,11 @@ export const execMethods = {
     Execution,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const result = await saveExecution(
+      return await saveExecution(
         ctx,
         await executeSocket(ctx, args),
         args.failOnNonZero,
       );
-      return result;
     },
   ),
   attach: method(
@@ -395,12 +394,11 @@ export const execMethods = {
     Execution,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const result = await saveExecution(
+      return await saveExecution(
         ctx,
         await executeSocket(ctx, args),
         args.failOnNonZero,
       );
-      return result;
     },
   ),
   execHttp: method(
@@ -419,13 +417,12 @@ export const execMethods = {
         ),
         stdin: args.input !== undefined,
       }, new Uint8Array(await inputBytes(args.input)));
-      const output = await saveExecution(ctx, {
+      return await saveExecution(ctx, {
         ...result,
         status: "exited",
         sessionId: null,
         controls: [],
       }, args.failOnNonZero);
-      return output;
     },
   ),
   listSessions: method(

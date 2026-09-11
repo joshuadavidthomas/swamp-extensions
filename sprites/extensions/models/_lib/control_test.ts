@@ -333,7 +333,7 @@ Deno.test("control exec rejects protocol errors, unsupported frames, and truncat
     includes: "mismatched TTY",
   }, {
     frames: [binary(9, 1)],
-    includes: "invalid stream",
+    includes: "invalid frame",
   }, {
     frames: [binary(3, 0), binary(3, 0)],
     includes: "duplicate exit",

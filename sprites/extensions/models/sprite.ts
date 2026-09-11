@@ -20,7 +20,7 @@ import { managementMethods, managementResources } from "./_lib/management.ts";
 /** One Sprite, scoped to one organization credential. Methods retain native API argument names. */
 export const model = {
   type: "@josh/sprites/sprite",
-  version: "2026.09.09.1",
+  version: "2026.09.10.1",
   globalArguments: SpriteArgsSchema,
   resources: {
     ...restResources,

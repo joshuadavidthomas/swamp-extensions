@@ -5,8 +5,8 @@ import {
   withMockedFetch,
 } from "@swamp-club/swamp-testing";
 import {
+  createManagementMethods,
   type ManagementExec,
-  managementMethods as methods,
   TaskExpiry,
 } from "./management.ts";
 import type { SpriteContext } from "./sprite-api.ts";
@@ -59,9 +59,7 @@ function setup(stored = true) {
   });
   return {
     ...test,
-    ctx: { ...test.context, globalArgs } as unknown as SpriteContext & {
-      managementExec?: ManagementExec;
-    },
+    ctx: { ...test.context, globalArgs } as unknown as SpriteContext,
   };
 }
 const identity = () => new Response(JSON.stringify(sprite));
@@ -184,7 +182,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       assertEquals(query.stdin, "body" in c);
       return Promise.resolve(result(c.response, c.status));
     };
-    test.ctx.managementExec = execute;
+    const methods = createManagementMethods(execute);
     const { calls } = await withMockedFetch(
       [identity()],
       () => methods[c.method].execute(c.input as never, test.ctx),
@@ -209,11 +207,11 @@ Deno.test("getService rejects a different service name, HTTP errors, and malform
   for (const response of failures) {
     const test = setup();
     let count = 0;
-    test.ctx.managementExec = (_ctx, query) => {
+    const methods = createManagementMethods((_ctx, query) => {
       count++;
       assertEquals(query.stdin, false);
       return Promise.resolve(response);
-    };
+    });
     await assertRejects(
       () =>
         withMockedFetch(
@@ -234,10 +232,10 @@ Deno.test("getService rejects a different service name, HTTP errors, and malform
 Deno.test("getService requires the saved Sprite identity before local exec", async () => {
   const test = setup(false);
   let count = 0;
-  test.ctx.managementExec = () => {
+  const methods = createManagementMethods(() => {
     count++;
     return Promise.resolve(result(JSON.stringify(service), 200));
-  };
+  });
   await assertRejects(
     () =>
       withMockedFetch(
@@ -274,10 +272,10 @@ Deno.test("management failures are sanitized and never replay a mutation", async
   ) {
     const test = setup();
     let count = 0;
-    test.ctx.managementExec = () => {
+    const methods = createManagementMethods(() => {
       count++;
       return Promise.resolve(response);
-    };
+    });
     const error = await assertRejects(
       () =>
         withMockedFetch(
@@ -303,7 +301,9 @@ Deno.test("management reads reject invalid JSON and invalid shapes", async () =>
     ]
   ) {
     const test = setup();
-    test.ctx.managementExec = () => Promise.resolve(result(body, 200));
+    const methods = createManagementMethods(() =>
+      Promise.resolve(result(body, 200))
+    );
     const error = await assertRejects(
       () =>
         withMockedFetch(
@@ -321,10 +321,10 @@ Deno.test("management refuses missing or replaced Sprite identity before exec", 
   for (const stored of [false, true]) {
     const test = setup(stored);
     let count = 0;
-    test.ctx.managementExec = () => {
+    const methods = createManagementMethods(() => {
       count++;
       return Promise.resolve(result());
-    };
+    });
     await assertRejects(
       () =>
         withMockedFetch(
@@ -371,7 +371,7 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
     const controller = new AbortController();
     test.ctx.signal = controller.signal;
     test.ctx.globalArgs = { ...globalArgs, timeoutMs: 30 };
-    test.ctx.managementExec = () => {
+    const methods = createManagementMethods(() => {
       if (cancel) controller.abort();
       else {
         const deadline = performance.now() + 40;
@@ -380,7 +380,7 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
         ) { /* Queue starvation: timer cannot fire. */ }
       }
       return Promise.resolve(result("", 201));
-    };
+    });
     await assertRejects(
       () =>
         withMockedFetch(

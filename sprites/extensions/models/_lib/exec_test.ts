@@ -407,7 +407,7 @@ Deno.test("HTTP exec rejects missing exit, malformed frames, truncation, and byt
     () =>
       decodeHttpExec(stream(httpWire([new Uint8Array([3, 1, 2])]), 3), 1024),
     Error,
-    "invalid stream",
+    "invalid frame",
   );
   const bytes = httpWire([new Uint8Array([3, 0])]);
   await assertRejects(

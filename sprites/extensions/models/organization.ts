@@ -251,7 +251,7 @@ async function listSpritesPage(
 /** Fly.io Sprites organization inventory model. */
 export const model = {
   type: "@josh/sprites/organization",
-  version: "2026.09.09.1",
+  version: "2026.09.10.1",
   // Inventory allows 30 seconds per page, including larger organization lists.
   globalArguments: AuthSchema.extend({
     timeoutMs: AuthSchema.shape.timeoutMs.default(30_000),

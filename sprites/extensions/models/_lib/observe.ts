@@ -87,11 +87,7 @@ type Observation<F, E, T> = {
   first: (bytes: Uint8Array) => F;
   eventSchema: z.ZodType<E>;
   event: (value: E) => T;
-  eventError: string;
   operation: string;
-  firstRequirement: string;
-  firstBinary: string;
-  eventBinary: string;
   cap: number;
   byteBound: number;
   durationMs: number;
@@ -152,12 +148,12 @@ async function observe<F, E, T>(
     check();
     if (!initial) {
       throw new Error(
-        `${options.operation} disconnected before ${options.firstRequirement}.`,
+        `${options.operation} disconnected before its first message.`,
       );
     }
     if (initial.binary) {
       throw new Error(
-        `${options.operation} returned a binary ${options.firstBinary}.`,
+        `${options.operation} returned an unexpected binary frame.`,
       );
     }
     const first = options.first(initial.bytes);
@@ -179,13 +175,13 @@ async function observe<F, E, T>(
       }
       if (next.binary) {
         throw new Error(
-          `${options.operation} returned an unexpected binary ${options.eventBinary}.`,
+          `${options.operation} returned an unexpected binary frame.`,
         );
       }
       const event = decodeFrame(
         next.bytes,
         options.eventSchema,
-        options.eventError,
+        `${options.operation} returned an invalid event.`,
       );
       events.push(options.event(event));
     }
@@ -243,7 +239,6 @@ export async function observeWatch(
       return value;
     },
     eventSchema: WatchMessage,
-    eventError: "Filesystem watch returned an invalid JSON control frame.",
     event: (value) => {
       if (value.type === "error") {
         throw watchError(value.message, ctx.globalArgs.token);
@@ -256,9 +251,6 @@ export async function observeWatch(
       return value;
     },
     operation: "Filesystem watch",
-    firstRequirement: "acknowledging its subscription",
-    firstBinary: "subscription acknowledgement",
-    eventBinary: "frame",
     cap: args.maxEvents,
     byteBound: ctx.globalArgs.maxResponseBytes,
     durationMs: args.durationMs,
@@ -283,12 +275,7 @@ export async function watchPorts(
       ),
     eventSchema: PortNotification,
     event: (value) => value,
-    eventError:
-      "Sprite port watch returned an invalid port notification frame.",
     operation: "Sprite port watch",
-    firstRequirement: "its initial snapshot",
-    firstBinary: "initial snapshot frame",
-    eventBinary: "notification frame",
     cap: args.maxEvents,
     byteBound: ctx.globalArgs.maxResponseBytes,
     durationMs: args.durationMs,
