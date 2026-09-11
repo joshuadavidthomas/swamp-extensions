@@ -165,21 +165,21 @@ export async function observeWatch(
 }
 
 export const fsResources = {
-  files: resource(FsList, "Native filesystem directory listing"),
-  fileWritten: resource(FsWrite, "Native filesystem write result"),
-  fileDeleted: resource(FsDelete, "Native filesystem deletion result"),
-  fileCopied: resource(FsCopy, "Native filesystem copy result"),
-  fileRenamed: resource(FsRename, "Native filesystem rename result"),
-  fileModeChanged: resource(FsChmod, "Native filesystem chmod result"),
-  fileOwnerChanged: resource(FsChown, "Native filesystem chown result"),
-  watchEvents: resource(
+  listFiles: resource(FsList, "Native filesystem directory listing"),
+  writeFile: resource(FsWrite, "Native filesystem write result"),
+  deleteFile: resource(FsDelete, "Native filesystem deletion result"),
+  copyFile: resource(FsCopy, "Native filesystem copy result"),
+  renameFile: resource(FsRename, "Native filesystem rename result"),
+  chmodFile: resource(FsChmod, "Native filesystem chmod result"),
+  chownFile: resource(FsChown, "Native filesystem chown result"),
+  watch: resource(
     WatchOutput,
     "Bounded filesystem watch events; never an exhaustive history",
     "7d",
   ),
 };
 
-export const fsFiles = { contents: BinaryFile };
+export const fsFiles = { readFile: BinaryFile };
 
 export const fsMethods = {
   listFiles: method(
@@ -188,7 +188,7 @@ export const fsMethods = {
       recursive: z.boolean().optional(),
       pattern: z.string().optional(),
     }),
-    "files",
+    "listFiles",
     FsList,
     (args, ctx: SpriteContext) =>
       jsonRequest(ctx, "GET", fsPath(ctx, "list"), FsList, {
@@ -207,7 +207,7 @@ export const fsMethods = {
         response,
         ctx.globalArgs.maxResponseBytes,
       );
-      const handle = await ctx.createFileWriter("contents", "contents")
+      const handle = await ctx.createFileWriter("readFile", "readFile")
         .writeAll(bytes);
       ctx.logger.info("Read Sprite file", { bytes: bytes.length });
       return withHandles(undefined, [handle]);
@@ -221,7 +221,7 @@ export const fsMethods = {
       // The live OpenAPI calls this query parameter mkdir; older SDKs used mkdirParents.
       mkdir: z.boolean().optional(),
     }),
-    "fileWritten",
+    "writeFile",
     FsWrite,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -240,7 +240,7 @@ export const fsMethods = {
   deleteFile: method(
     "Delete a Sprite file or directory",
     WorkingPath.merge(CommonMutation),
-    "fileDeleted",
+    "deleteFile",
     FsDelete,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -256,7 +256,7 @@ export const fsMethods = {
       dest: z.string().min(1),
       preserveAttrs: z.boolean().default(false),
     }).extend(WorkingDir.shape).merge(CommonMutation),
-    "fileCopied",
+    "copyFile",
     FsCopy,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -273,7 +273,7 @@ export const fsMethods = {
     }).extend(WorkingDir.shape).extend(
       CommonMutation.omit({ recursive: true }).shape,
     ),
-    "fileRenamed",
+    "renameFile",
     FsRename,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -287,7 +287,7 @@ export const fsMethods = {
     WorkingPath.merge(CommonMutation).extend({
       mode: z.string().regex(/^[0-7]{3,4}$/),
     }),
-    "fileModeChanged",
+    "chmodFile",
     FsChmod,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -304,7 +304,7 @@ export const fsMethods = {
     }).refine((value) => value.uid !== undefined || value.gid !== undefined, {
       message: "Provide uid or gid.",
     }),
-    "fileOwnerChanged",
+    "chownFile",
     FsChown,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -316,7 +316,7 @@ export const fsMethods = {
   watch: method(
     "Observe acknowledged Sprite filesystem events for a bounded duration",
     WatchArgs,
-    "watchEvents",
+    "watch",
     WatchOutput,
     (args, ctx: SpriteContext) => observeWatch(ctx, args),
   ),

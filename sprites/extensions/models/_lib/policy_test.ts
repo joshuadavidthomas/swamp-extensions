@@ -13,7 +13,7 @@ const routeCases: RouteCase[] = [
     httpMethod: "GET",
     path: "/v1/sprites/demo%20sprite/policy/network",
     response: json({ rules: [{ action: "allow", domain: "example.com" }] }),
-    output: "networkPolicy",
+    output: "getNetworkPolicy",
   },
   {
     name: "setNetworkPolicy",
@@ -33,7 +33,7 @@ const routeCases: RouteCase[] = [
       devices: ["null"],
       noNewPrivileges: true,
     }),
-    output: "privilegesPolicy",
+    output: "getPrivilegesPolicy",
   },
   {
     name: "setPrivilegesPolicy",
@@ -57,7 +57,7 @@ const routeCases: RouteCase[] = [
     httpMethod: "GET",
     path: "/v1/sprites/demo%20sprite/policy/resources",
     response: json({ memory: { limit_mb: 512, autoscale: true } }),
-    output: "resourcesPolicy",
+    output: "getResourcesPolicy",
   },
   {
     name: "setResourcesPolicy",

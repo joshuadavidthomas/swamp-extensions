@@ -28,16 +28,16 @@ export const ResourcesPolicy = z.object({
 });
 
 export const policyResources = {
-  networkPolicy: resource(NetworkPolicy, "Sprite network policy"),
-  privilegesPolicy: resource(PrivilegesPolicy, "Sprite privilege policy"),
-  resourcesPolicy: resource(ResourcesPolicy, "Sprite resource policy"),
+  getNetworkPolicy: resource(NetworkPolicy, "Sprite network policy"),
+  getPrivilegesPolicy: resource(PrivilegesPolicy, "Sprite privilege policy"),
+  getResourcesPolicy: resource(ResourcesPolicy, "Sprite resource policy"),
 };
 
 export const policyMethods = {
   getNetworkPolicy: method(
     "Read the Sprite network policy",
     Empty,
-    "networkPolicy",
+    "getNetworkPolicy",
     NetworkPolicy,
     (_args, ctx: SpriteContext) =>
       jsonRequest(
@@ -66,7 +66,7 @@ export const policyMethods = {
   getPrivilegesPolicy: method(
     "Read the Sprite privilege policy",
     Empty,
-    "privilegesPolicy",
+    "getPrivilegesPolicy",
     PrivilegesPolicy,
     (_args, ctx: SpriteContext) =>
       jsonRequest(
@@ -108,7 +108,7 @@ export const policyMethods = {
   getResourcesPolicy: method(
     "Read the Sprite resource policy",
     Empty,
-    "resourcesPolicy",
+    "getResourcesPolicy",
     ResourcesPolicy,
     (_args, ctx: SpriteContext) =>
       jsonRequest(

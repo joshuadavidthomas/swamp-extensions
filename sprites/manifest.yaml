@@ -9,7 +9,7 @@ description: |
 
   The organization token determines the scope of each model. Sprite mutations
   require a saved identity and reject a replacement with the same name. Exec
-  saves execution metadata and binary stdout and stderr artifacts.
+  saves an `exec` record and binary `execStdout` and `execStderr` files.
 
   ## Models
 

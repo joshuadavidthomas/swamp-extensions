@@ -37,7 +37,7 @@ function path(ctx: ChildContext, id: string, suffix = ""): string {
   );
 }
 async function savedId(ctx: ChildContext): Promise<string> {
-  return CheckpointRecord.parse(await ctx.readResource("checkpoint")).id;
+  return CheckpointRecord.parse(await ctx.readResource("state")).id;
 }
 async function record(
   ctx: ChildContext,
@@ -56,12 +56,12 @@ export const model = {
   version: "2026.09.11.1",
   globalArguments: CheckpointArgsSchema,
   resources: {
-    checkpoint: resource(
+    state: resource(
       CheckpointRecord,
       "Saved checkpoint and its Sprite identity",
     ),
-    created: resource(CheckpointEvents, "Checkpoint creation progress", "7d"),
-    restored: resource(
+    create: resource(CheckpointEvents, "Checkpoint creation progress", "7d"),
+    restore: resource(
       CheckpointEvents,
       "Checkpoint restoration progress",
       "7d",
@@ -71,10 +71,10 @@ export const model = {
     create: method(
       "Take a fresh checkpoint and point this slot at it; a bound slot is retaken and its old id stays in history",
       z.object({ comment: z.string().optional() }),
-      "checkpoint",
+      "state",
       CheckpointRecord,
       async (args, ctx: ChildContext) => {
-        const sprite = await bindSprite(ctx, "checkpoint");
+        const sprite = await bindSprite(ctx);
         const events = await checkpointStream(
           ctx,
           spritePath(ctx.globalArgs.sprite, "/checkpoint"),
@@ -104,8 +104,8 @@ export const model = {
           );
         }
         const progress = await ctx.writeResource(
-          "created",
-          "created",
+          "create",
+          "create",
           CheckpointEvents.parse(events),
         );
         return withHandles({
@@ -117,30 +117,30 @@ export const model = {
     get: method(
       "Read the checkpoint id saved in this slot",
       Empty,
-      "checkpoint",
+      "state",
       CheckpointRecord,
       async (_args, ctx: ChildContext) => {
-        const sprite = await boundSprite(ctx, "checkpoint");
+        const sprite = await boundSprite(ctx);
         return record(ctx, await savedId(ctx), sprite);
       },
     ),
     restore: method(
       "Restore the checkpoint id saved in this slot",
       Empty,
-      "restored",
+      "restore",
       CheckpointEvents,
       async (_args, ctx: ChildContext) => {
-        await boundSprite(ctx, "checkpoint");
+        await boundSprite(ctx);
         return checkpointStream(ctx, path(ctx, await savedId(ctx), "/restore"));
       },
     ),
     lookup: method(
       "Adopt an existing checkpoint id into this slot",
       z.object({ checkpoint_id: z.string().min(1) }),
-      "checkpoint",
+      "state",
       CheckpointRecord,
       async (args, ctx: ChildContext) =>
-        record(ctx, args.checkpoint_id, await bindSprite(ctx, "checkpoint")),
+        record(ctx, args.checkpoint_id, await bindSprite(ctx)),
     ),
   },
 };

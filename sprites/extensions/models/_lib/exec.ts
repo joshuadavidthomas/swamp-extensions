@@ -626,6 +626,7 @@ export async function saveExecution(
   ctx: SpriteContext,
   result: SocketResult,
   failOnNonZero: boolean,
+  methodName: "exec" | "attach" | "execHttp",
 ) {
   if (failOnNonZero && result.exitCode !== null && result.exitCode !== 0) {
     throw new Error(
@@ -641,10 +642,16 @@ export async function saveExecution(
     stderrBytes: result.stderr.length,
     controls: result.controls,
   };
-  const stdout = await ctx.createFileWriter("stdout", "stdout").writeAll(
+  const stdout = await ctx.createFileWriter(
+    `${methodName}Stdout`,
+    `${methodName}Stdout`,
+  ).writeAll(
     result.stdout,
   );
-  const stderr = await ctx.createFileWriter("stderr", "stderr").writeAll(
+  const stderr = await ctx.createFileWriter(
+    `${methodName}Stderr`,
+    `${methodName}Stderr`,
+  ).writeAll(
     result.stderr,
   );
   return withHandles(data, [stdout, stderr]);
@@ -658,39 +665,57 @@ async function runSocket(
     ctx,
     await executeSocket(ctx, args),
     args.failOnNonZero,
+    "session_id" in args ? "attach" : "exec",
   );
 }
 export const execResources = {
-  execution: resource(
+  exec: resource(
     Execution,
     "Command result or detached session identity",
     "7d",
   ),
-  sessions: resource(Sessions, "Exec sessions", "7d"),
-  sessionKilled: resource(Killed, "Session termination progress", "7d"),
+  attach: resource(
+    Execution,
+    "Command result or detached session identity",
+    "7d",
+  ),
+  execHttp: resource(
+    Execution,
+    "Command result or detached session identity",
+    "7d",
+  ),
+  listSessions: resource(Sessions, "Exec sessions", "7d"),
+  killSession: resource(Killed, "Session termination progress", "7d"),
 };
 /** Separate binary stdout/stderr files avoid encoding loss. */
-export const execFiles = { stdout: BinaryFile, stderr: BinaryFile };
+export const execFiles = {
+  execStdout: BinaryFile,
+  execStderr: BinaryFile,
+  attachStdout: BinaryFile,
+  attachStderr: BinaryFile,
+  execHttpStdout: BinaryFile,
+  execHttpStderr: BinaryFile,
+};
 /** All HTTP and WebSocket execution methods. */
 export const execMethods = {
   exec: method(
     "Execute a command over WebSocket with binary output and optional TTY controls",
     ExecArgs,
-    "execution",
+    "exec",
     Execution,
     (args, ctx: SpriteContext) => runSocket(ctx, args),
   ),
   attach: method(
     "Attach to an existing exec session and exchange input, output, and controls",
     AttachArgs,
-    "execution",
+    "attach",
     Execution,
     (args, ctx: SpriteContext) => runSocket(ctx, args),
   ),
   execHttp: method(
     "Execute over HTTP/1.1 while preserving provider chunk framing",
     CommandArgs,
-    "execution",
+    "execHttp",
     Execution,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
@@ -701,18 +726,23 @@ export const execMethods = {
         env: envPairs(args.env),
         stdin: args.input !== undefined,
       }, inputBytes(args.input));
-      return await saveExecution(ctx, {
-        ...result,
-        status: "exited",
-        sessionId: null,
-        controls: [],
-      }, args.failOnNonZero);
+      return await saveExecution(
+        ctx,
+        {
+          ...result,
+          status: "exited",
+          sessionId: null,
+          controls: [],
+        },
+        args.failOnNonZero,
+        "execHttp",
+      );
     },
   ),
   listSessions: method(
     "List exec sessions",
     z.object({}),
-    "sessions",
+    "listSessions",
     Sessions,
     (_args, ctx: SpriteContext) =>
       jsonRequest(
@@ -729,7 +759,7 @@ export const execMethods = {
       signal: z.string().optional(),
       timeout: z.string().optional(),
     }),
-    "sessionKilled",
+    "killSession",
     Killed,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);

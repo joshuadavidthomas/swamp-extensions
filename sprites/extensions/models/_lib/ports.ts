@@ -62,7 +62,7 @@ export async function watchPorts(
 }
 
 export const portsResources = {
-  portEvents: resource(
+  watchPorts: resource(
     PortWatchOutput,
     "Initial listening-port snapshot and bounded incremental notifications",
     "7d",
@@ -73,7 +73,7 @@ export const portsMethods = {
   watchPorts: method(
     "Observe a Sprite listening-port snapshot and bounded open/close notifications",
     PortWatchArgs,
-    "portEvents",
+    "watchPorts",
     PortWatchOutput,
     (args, ctx: SpriteContext) => watchPorts(ctx, args),
   ),

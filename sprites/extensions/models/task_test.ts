@@ -41,7 +41,7 @@ const result = (
 function setup(stored = true) {
   return testContext(globalArgs, {
     storedResources: stored
-      ? { task: { ...task, sprite: { name: sprite.name, id: sprite.id } } }
+      ? { state: { ...task, sprite: { name: sprite.name, id: sprite.id } } }
       : {},
   });
 }
@@ -56,7 +56,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       path: `/v1/tasks/${encodeURIComponent(task.name)}`,
       status: 200,
       response: JSON.stringify(task),
-      spec: "task",
+      spec: "state",
       output: task,
     },
     {
@@ -67,7 +67,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       body: { name: task.name, expire: 60 },
       status: 201,
       response: "unpublished success body",
-      spec: "task",
+      spec: "state",
       output: task,
     },
     {
@@ -78,7 +78,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       body: { expire: "30s" },
       status: 200,
       response: "",
-      spec: "task",
+      spec: "state",
       output: task,
     },
     {
@@ -143,7 +143,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
       c.method === "create" || c.method === "refresh" ? 2 : 1,
     );
     if (c.method === "delete") {
-      assertEquals(test.getDeletedResources(), ["task"]);
+      assertEquals(test.getDeletedResources(), ["state"]);
     }
     if (c.output !== undefined) {
       const written = test.getWrittenResources()[0];

@@ -105,14 +105,14 @@ export async function serviceStream(
 }
 
 export const servicesResources = {
-  services: resource(Services, "Configured Sprite services"),
+  listServices: resource(Services, "Configured Sprite services"),
 };
 
 export const servicesMethods = {
   listServices: method(
     "List configured Sprite services",
     Empty,
-    "services",
+    "listServices",
     Services,
     async (_args, ctx: SpriteContext) => ({
       services: await jsonRequest(

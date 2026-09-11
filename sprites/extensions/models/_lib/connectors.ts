@@ -64,7 +64,7 @@ export const ConnectionsResponseSchema = z.object({
 });
 
 export const connectorsResources = {
-  connectors: resource(
+  listConnectors: resource(
     ConnectionsResponseSchema,
     "Complete organization connector collection",
   ),
@@ -73,7 +73,7 @@ export const connectorsMethods = {
   listConnectors: method(
     "List organization connectors",
     z.object({ provider: z.string().optional() }),
-    "connectors",
+    "listConnectors",
     ConnectionsResponseSchema,
     (args, ctx) =>
       jsonRequest(

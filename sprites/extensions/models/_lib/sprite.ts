@@ -112,19 +112,17 @@ export async function verifySprite(
 /** The Sprite id a child instance saved in its own state resource, if it has bound. */
 async function savedParent(
   ctx: ChildContext,
-  spec: string,
 ): Promise<string | undefined> {
   const stored = z.object({ sprite: SpriteIdentity }).safeParse(
-    await ctx.readResource(spec),
+    await ctx.readResource("state"),
   );
   return stored.success ? stored.data.sprite.id : undefined;
 }
 /** Child models, when creating or looking up: verify a bound Sprite, or read an unbound one so the caller can bind it. */
 export async function bindSprite(
   ctx: ChildContext,
-  spec: string,
 ): Promise<z.output<typeof SpriteResponse>> {
-  const savedId = await savedParent(ctx, spec);
+  const savedId = await savedParent(ctx);
   if (savedId === undefined) {
     return jsonRequest(
       ctx,
@@ -138,12 +136,11 @@ export async function bindSprite(
 /** Child models, for every other method: the instance must already be bound to its Sprite. */
 export async function boundSprite(
   ctx: ChildContext,
-  spec: string,
 ): Promise<z.output<typeof SpriteResponse>> {
-  const savedId = await savedParent(ctx, spec);
+  const savedId = await savedParent(ctx);
   if (savedId === undefined) {
     throw new Error(
-      `No Sprite identity is saved for this ${spec}. Create or look it up first.`,
+      "No Sprite identity is saved. Create or look it up first.",
     );
   }
   return verifyIdentity(ctx, ctx.globalArgs.sprite, savedId);
@@ -151,7 +148,7 @@ export async function boundSprite(
 
 export const spriteResources = {
   state: resource(SpriteResponse, "Current provider metadata for this Sprite"),
-  urlProbe: resource(
+  probeUrl: resource(
     UrlProbe,
     "Authenticated root URL response fingerprint; not a general application health guarantee",
     "7d",
@@ -251,7 +248,7 @@ export const spriteMethods = {
   probeUrl: method(
     "Check the verified Sprite root URL and fingerprint its response",
     Empty,
-    "urlProbe",
+    "probeUrl",
     UrlProbe,
     async (_args, ctx: SpriteContext) => {
       const operation = deadline(ctx);

@@ -187,19 +187,19 @@ Deno.test("fanOut includes operation handles before each row without storing the
         z.object({ value: z.number() }),
         (sprite) =>
           Promise.resolve({
-            handles: [{ name: `stdout-${sprite.name}` }, {
-              name: `stderr-${sprite.name}`,
+            handles: [{ name: `exec-stdout-${sprite.name}` }, {
+              name: `exec-stderr-${sprite.name}`,
             }],
             value: 1,
           }),
       ),
   );
   assertEquals(result.handles.map((h) => h.name), [
-    "stdout-worker-1",
-    "stderr-worker-1",
+    "exec-stdout-worker-1",
+    "exec-stderr-worker-1",
     "testOp-worker-1",
-    "stdout-worker-2",
-    "stderr-worker-2",
+    "exec-stdout-worker-2",
+    "exec-stderr-worker-2",
     "testOp-worker-2",
   ]);
   assertEquals(

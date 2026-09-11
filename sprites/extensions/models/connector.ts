@@ -30,7 +30,7 @@ const AuthorizationSchema = z.object({
 
 async function unbound(ctx: ConnectorContext): Promise<void> {
   const saved = z.object({ id: z.string() }).safeParse(
-    await ctx.readResource("connection"),
+    await ctx.readResource("state"),
   );
   if (saved.success) {
     throw new Error(
@@ -40,7 +40,7 @@ async function unbound(ctx: ConnectorContext): Promise<void> {
 }
 async function savedId(ctx: ConnectorContext): Promise<string> {
   const saved = z.object({ id: z.string().min(1) }).safeParse(
-    await ctx.readResource("connection"),
+    await ctx.readResource("state"),
   );
   if (!saved.success) {
     throw new Error(
@@ -73,11 +73,11 @@ export const model = {
   version: "2026.09.11.1",
   globalArguments: ConnectorArgsSchema,
   resources: {
-    connection: resource(
+    state: resource(
       ConnectionSchema,
       "This organization connection and its current access policy",
     ),
-    pending: resource(
+    authorize: resource(
       AuthorizationSchema,
       "Sensitive provider authorization URL and OAuth state",
       "1d",
@@ -92,7 +92,7 @@ export const model = {
         ),
         access_policy: AccessPolicySchema.optional(),
       }),
-      "connection",
+      "state",
       ConnectionSchema,
       async (args, ctx: ConnectorContext) => {
         await unbound(ctx);
@@ -104,7 +104,7 @@ export const model = {
     provision: method(
       "Provision a managed connection; refuse an already bound instance",
       Empty,
-      "connection",
+      "state",
       ConnectionSchema,
       async (_args, ctx: ConnectorContext) => {
         await unbound(ctx);
@@ -127,7 +127,7 @@ export const model = {
           "Optional OAuth state API field. Sprites generates one when omitted.",
         ),
       }),
-      "pending",
+      "authorize",
       AuthorizationSchema,
       async (args, ctx: ConnectorContext) => {
         await unbound(ctx);
@@ -147,12 +147,12 @@ export const model = {
         redirect_uri: z.string().optional(),
         access_policy: AccessPolicySchema.optional(),
       }),
-      "connection",
+      "state",
       ConnectionSchema,
       async (args, ctx: ConnectorContext) => {
         await unbound(ctx);
         const pending = AuthorizationSchema.safeParse(
-          await ctx.readResource("pending"),
+          await ctx.readResource("authorize"),
         );
         if (!pending.success) {
           throw new Error(
@@ -167,14 +167,14 @@ export const model = {
             json: { ...args, state: pending.data.state },
           },
         );
-        await ctx.deleteResource("pending");
+        await ctx.deleteResource("authorize");
         return connection;
       },
     ),
     get: method(
       "Read this saved organization connection",
       Empty,
-      "connection",
+      "state",
       ConnectionSchema,
       async (_args, ctx: ConnectorContext) =>
         request(ctx, "GET", path(await savedId(ctx))),
@@ -182,7 +182,7 @@ export const model = {
     updatePolicy: method(
       "Replace this connection's complete access policy",
       z.object({ access_policy: AccessPolicySchema }),
-      "connection",
+      "state",
       ConnectionSchema,
       async (args, ctx: ConnectorContext) =>
         request(ctx, "PUT", path(await savedId(ctx)), { json: args }),
@@ -198,13 +198,13 @@ export const model = {
         } catch (error) {
           if (!(error instanceof ApiError && error.status === 404)) throw error;
         }
-        await ctx.deleteResource("connection");
+        await ctx.deleteResource("state");
       },
     ),
     lookup: method(
       "Adopt an existing organization connection id",
       z.object({ id: z.string().min(1) }),
-      "connection",
+      "state",
       ConnectionSchema,
       (args, ctx: ConnectorContext) => request(ctx, "GET", path(args.id)),
     ),

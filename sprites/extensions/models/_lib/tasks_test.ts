@@ -91,7 +91,7 @@ Deno.test("listTasks uses its local route and writes typed tasks", async () => {
   );
   assertEquals(calls.length, 1);
   assertEquals(count, 1);
-  assertEquals(test.getWrittenResources()[0].specName, "tasks");
+  assertEquals(test.getWrittenResources()[0].specName, "listTasks");
   assertEquals(test.getWrittenResources()[0].data, { tasks: [task] });
 });
 Deno.test("listTasks refuses missing or replaced Sprite identity before exec", async () => {

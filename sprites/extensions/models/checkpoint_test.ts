@@ -25,7 +25,7 @@ Deno.test("checkpoint create binds the newest by time, including when retaking a
   for (const bound of [false, true]) {
     const test = testContext(globalArgs, {
       storedResources: bound
-        ? { checkpoint: { ...checkpoint, id: "old", sprite: parent } }
+        ? { state: { ...checkpoint, id: "old", sprite: parent } }
         : {},
     });
     let body: unknown;
@@ -61,8 +61,8 @@ Deno.test("checkpoint create binds the newest by time, including when retaking a
     assertEquals(body, { comment: "safe" });
     assertEquals(result.dataHandles.length, 2);
     assertEquals(test.getWrittenResources().map((w) => w.specName), [
-      "created",
-      "checkpoint",
+      "create",
+      "state",
     ]);
     assertEquals(test.getWrittenResources()[1].data, {
       ...checkpoint,
@@ -75,7 +75,7 @@ Deno.test("checkpoint get, restore and lookup use the saved or adopted id", asyn
     const test = testContext(globalArgs, {
       storedResources: name === "lookup"
         ? {}
-        : { checkpoint: { ...checkpoint, sprite: parent } },
+        : { state: { ...checkpoint, sprite: parent } },
     });
     const { calls } = await withMockedFetch(
       [
@@ -102,7 +102,7 @@ Deno.test("checkpoint get, restore and lookup use the saved or adopted id", asyn
     assertEquals(calls[1].headers.authorization, "Bearer test-token");
     assertEquals(
       test.getWrittenResources()[0].specName,
-      name === "restore" ? "restored" : "checkpoint",
+      name === "restore" ? "restore" : "state",
     );
     if (name !== "restore") {
       assertEquals(test.getWrittenResources()[0].data, {
@@ -118,7 +118,7 @@ Deno.test("checkpoint refuses unbound non-binding methods and all methods on a r
       if (!bound && (name === "create" || name === "lookup")) continue;
       const test = testContext(globalArgs, {
         storedResources: bound
-          ? { checkpoint: { ...checkpoint, sprite: parent } }
+          ? { state: { ...checkpoint, sprite: parent } }
           : {},
       });
       const { calls } = await withMockedFetch(

@@ -63,7 +63,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/services/web%2FAPI?duration=5s",
     response: ndjson(serviceStream),
     verifies: true,
-    output: "service",
+    output: "state",
   },
   {
     name: "logs",
@@ -81,7 +81,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/services/web%2FAPI/start?duration=5s",
     response: ndjson(serviceStream),
     verifies: true,
-    output: "started",
+    output: "start",
   },
   {
     name: "stop",
@@ -90,7 +90,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/services/web%2FAPI/stop?timeout=10s",
     response: ndjson(serviceStream),
     verifies: true,
-    output: "stopped",
+    output: "stop",
   },
   {
     name: "restart",
@@ -99,7 +99,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/services/web%2FAPI/restart?duration=5s",
     response: ndjson(serviceStream),
     verifies: true,
-    output: "restarted",
+    output: "restart",
   },
   {
     name: "delete",
@@ -114,7 +114,7 @@ const routeCases: RouteCase[] = [
 Deno.test("service methods use provider routes and validated output", async () => {
   for (const c of routeCases) {
     const test = testContext(globalArgs, {
-      storedResources: { service: { ...service, sprite: parent } },
+      storedResources: { state: { ...service, sprite: parent } },
     });
     const { calls, result } = await withMockedFetch(
       [json(sprite), c.response, ...(c.name === "put" ? [json(service)] : [])],
@@ -138,7 +138,7 @@ Deno.test("service methods use provider routes and validated output", async () =
       });
     }
     if (c.name === "delete") {
-      assertEquals(test.getDeletedResources(), ["service"]);
+      assertEquals(test.getDeletedResources(), ["state"]);
     }
   }
 });
@@ -150,7 +150,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
     for (const code of [0, 1, 137]) {
       for (const complete of ["", '{"type":"complete","timestamp":3}\n']) {
         const test = testContext(globalArgs, {
-          storedResources: { service: { ...service, sprite: parent } },
+          storedResources: { state: { ...service, sprite: parent } },
         });
         const events =
           `{"type":"started","timestamp":1}\n{"type":"exit","exit_code":${code},"timestamp":2}\n${complete}`;
@@ -174,7 +174,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
     const name of ["stop", "logs", "restart"] as const
   ) {
     const test = testContext(globalArgs, {
-      storedResources: { service: { ...service, sprite: parent } },
+      storedResources: { state: { ...service, sprite: parent } },
     });
     const event = name === "logs" ? "exit" : "stopped";
     const events = `{"type":"${event}","exit_code":143,"timestamp":1}\n` +
@@ -191,7 +191,7 @@ Deno.test("startup exits fail even with complete, while stop and log exits remai
 Deno.test("service refuses an unbound or replaced Sprite before a non-binding method", async () => {
   for (const bound of [false, true]) {
     const test = testContext(globalArgs, {
-      storedResources: bound ? { service: { ...service, sprite: parent } } : {},
+      storedResources: bound ? { state: { ...service, sprite: parent } } : {},
     });
     const { calls } = await withMockedFetch(
       bound ? [json({ ...sprite, id: "replacement" })] : [],
@@ -209,11 +209,14 @@ Deno.test("service refuses an unbound or replaced Sprite before a non-binding me
 Deno.test("service put and get bind the Sprite identity on an unbound instance", async () => {
   for (const name of ["put", "get"] as const) {
     const test = testContext(globalArgs);
-    await withMockedFetch([
-      json(sprite),
-      ...(name === "put" ? [ndjson(serviceStream)] : []),
-      json(service),
-    ], () => runnable(name).execute(name === "put" ? { service } : {}, test));
+    await withMockedFetch(
+      [
+        json(sprite),
+        ...(name === "put" ? [ndjson(serviceStream)] : []),
+        json(service),
+      ],
+      () => runnable(name).execute(name === "put" ? { service } : {}, test),
+    );
     assertEquals(test.getWrittenResources().at(-1)?.data, {
       ...service,
       sprite: parent,
@@ -222,7 +225,7 @@ Deno.test("service put and get bind the Sprite identity on an unbound instance",
 });
 Deno.test("service logs refuse incomplete streams", async () => {
   const test = testContext(globalArgs, {
-    storedResources: { service: { ...service, sprite: parent } },
+    storedResources: { state: { ...service, sprite: parent } },
   });
   await withMockedFetch(
     [
@@ -240,7 +243,7 @@ Deno.test("service logs refuse incomplete streams", async () => {
 });
 Deno.test("service signal uses fixed local route and stdin JSON", async () => {
   const test = testContext(globalArgs, {
-    storedResources: { service: { ...service, sprite: parent } },
+    storedResources: { state: { ...service, sprite: parent } },
   });
   let called = 0;
   const execute: ManagementExec = (_ctx, name, query, input) => {
@@ -282,7 +285,7 @@ Deno.test("service signal refuses missing or replaced identity before exec", asy
       throw new Error("must not execute");
     });
     const test = testContext(globalArgs, {
-      storedResources: bound ? { service: { ...service, sprite: parent } } : {},
+      storedResources: bound ? { state: { ...service, sprite: parent } } : {},
     });
     await withMockedFetch(
       bound ? [json({ ...sprite, id: "replacement" })] : [],
@@ -318,7 +321,7 @@ Deno.test("service REST get rejects invalid shapes and HTTP errors without savin
 Deno.test("service delete accepts absence and preserves identity on other failures", async () => {
   for (const status of [404, 500]) {
     const test = testContext(globalArgs, {
-      storedResources: { service: { ...service, sprite: parent } },
+      storedResources: { state: { ...service, sprite: parent } },
     });
     const { calls } = await withMockedFetch([
       json(sprite),
@@ -329,7 +332,7 @@ Deno.test("service delete accepts absence and preserves identity on other failur
           model.methods.delete.execute({}, test), Error);}
     });
     assertEquals(calls.map((c) => c.method), ["GET", "DELETE"]);
-    assertEquals(test.getDeletedResources(), status === 404 ? ["service"] : []);
+    assertEquals(test.getDeletedResources(), status === 404 ? ["state"] : []);
   }
 });
 

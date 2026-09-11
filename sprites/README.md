@@ -49,7 +49,7 @@ and run code on it:
 ```sh
 swamp model method run build-web put --input '{"service":{"cmd":"python3","args":["-m","http.server","8080"],"http_port":8080}}'
 swamp model method run build-sprite exec --input '{"cmd":["python3","-c","print(6 * 7)"]}'
-swamp data get build-sprite stdout
+swamp data get build-sprite execStdout
 ```
 
 For an existing Sprite, run `lookup` instead of `create` to save its identity.
@@ -71,8 +71,9 @@ swamp model type describe @josh/sprites/connector --json
 
 File writes, exec stdin, and gateway bodies accept
 `{"kind":"text","text":"hello\n"}` or `{"kind":"base64","base64":"AP8="}`. They
-never read files from the Swamp host. Exec saves `execution` metadata and binary
-`stdout`/`stderr` artifacts; `failOnNonZero: false` retains nonzero exits.
+never read files from the Swamp host. Exec saves an `exec` record and binary
+`execStdout` and `execStderr` files; `failOnNonZero: false` retains nonzero
+exits.
 
 Reference stored results in model definitions with CEL, for example
 `${{ data.latest("build-sprite", "state").attributes.name }}`.
@@ -106,16 +107,17 @@ Reference stored results in model definitions with CEL, for example
   grant Sprite access; an empty policy denies access.
 - Organization fan-outs match Sprites by prefix or labels at call time, act one
   Sprite at a time, record failures per Sprite and continue, and check no Sprite
-  instance's saved identity. They save each Sprite's outcome as its own record
-  named `<operation>-<sprite>` (`setNetworkPolicy`, `setPrivilegesPolicy`,
-  `setResourcesPolicy`, `deletePrivilegesPolicy`, `deleteResourcesPolicy`,
-  `getNetworkPolicy`, `getPrivilegesPolicy`, `getResourcesPolicy`, `upgrade`,
-  `restart`, `createCheckpoint`, `putService`, `startService`, `stopService`,
-  `restartService`, `deleteService`, `exec`). Fleet `exec` gives each Sprite the
-  organization instance’s `timeoutMs`, which defaults to 30 seconds, so raise it
-  for slow commands.
+  instance's saved identity. Each fan-out method saves its summary under its own
+  name and each Sprite's outcome as `<method>-<sprite>`, or
+  `<method>-<service_name>-<sprite>` for the service methods. Fleet exec saves
+  `exec-stdout-<sprite>` and `exec-stderr-<sprite>`. Fleet `exec` gives each
+  Sprite the organization instance’s `timeoutMs`, which defaults to 30 seconds,
+  so raise it for slow commands.
 
 ## Development
+
+Every entity model keeps its entity in `state`; everything else a method saves
+is named after the method.
 
 From `sprites/`, use Swamp's bundled Deno or a current Deno on PATH:
 

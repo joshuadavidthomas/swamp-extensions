@@ -85,7 +85,7 @@ Deno.test("createApiKey sends snake_case credential and policy fields once", asy
     access_policy: policy,
   });
   assertEquals(getWrittenResources().length, 1);
-  assertEquals(getWrittenResources()[0].specName, "connection");
+  assertEquals(getWrittenResources()[0].specName, "state");
 });
 
 Deno.test("provision sends only the provider and stores its connection", async () => {
@@ -133,7 +133,7 @@ Deno.test("provision sends only the provider and stores its connection", async (
 
 Deno.test("get encodes the saved organization-scoped connector id", async () => {
   const context = testContext(globalArgs, {
-    storedResources: { connection: connection({ id: "connection/one" }) },
+    storedResources: { state: connection({ id: "connection/one" }) },
   });
 
   const { calls } = await withMockedFetch(
@@ -156,7 +156,7 @@ Deno.test("get encodes the saved organization-scoped connector id", async () => 
 
 Deno.test("updatePolicy sends the complete replacement policy", async () => {
   const context = testContext(globalArgs, {
-    storedResources: { connection: connection() },
+    storedResources: { state: connection() },
   });
   let requestBody: unknown;
 
@@ -184,7 +184,7 @@ Deno.test("updatePolicy sends the complete replacement policy", async () => {
 
 Deno.test("delete sends one DELETE and clears the saved id", async () => {
   const context = testContext(globalArgs, {
-    storedResources: { connection: connection() },
+    storedResources: { state: connection() },
   });
 
   const { result, calls } = await withMockedFetch(
@@ -200,12 +200,12 @@ Deno.test("delete sends one DELETE and clears the saved id", async () => {
   assertEquals(result.dataHandles.length, 0);
   const writes = context.getWrittenResources();
   assertEquals(writes.length, 0);
-  assertEquals(context.getDeletedResources(), ["connection"]);
+  assertEquals(context.getDeletedResources(), ["state"]);
 });
 
 Deno.test("delete accepts a 404 as an already-completed deletion", async () => {
   const context = testContext(globalArgs, {
-    storedResources: { connection: connection() },
+    storedResources: { state: connection() },
   });
 
   const { calls } = await withMockedFetch(
@@ -219,7 +219,7 @@ Deno.test("delete accepts a 404 as an already-completed deletion", async () => {
 
   assertEquals(calls.map((call) => call.method), ["DELETE"]);
   assertEquals(context.getWrittenResources(), []);
-  assertEquals(context.getDeletedResources(), ["connection"]);
+  assertEquals(context.getDeletedResources(), ["state"]);
 });
 
 Deno.test("authorize sends OAuth query fields and stores sensitive output", async () => {
@@ -254,13 +254,13 @@ Deno.test("authorize sends OAuth query fields and stores sensitive output", asyn
     "https://client.example.test/oauth/callback",
   );
   assertEquals(url.searchParams.get("state"), "client-state");
-  assertEquals(context.getWrittenResources()[0].specName, "pending");
+  assertEquals(context.getWrittenResources()[0].specName, "authorize");
 });
 
 Deno.test("callback sends code and saved state and policy without the provider path field", async () => {
   const context = testContext({ ...globalArgs, provider: "github" }, {
     storedResources: {
-      pending: {
+      authorize: {
         authorize_url: "https://example.com/authorize",
         state: "server-state",
       },
@@ -296,7 +296,7 @@ Deno.test("callback sends code and saved state and policy without the provider p
     state: "server-state",
     access_policy: policy,
   });
-  assertEquals(context.getWrittenResources()[0].specName, "connection");
+  assertEquals(context.getWrittenResources()[0].specName, "state");
 });
 
 Deno.test("connector binding methods refuse an already saved connection id", async () => {
@@ -310,8 +310,8 @@ Deno.test("connector binding methods refuse an already saved connection id", asy
   ) {
     const context = testContext(globalArgs, {
       storedResources: {
-        connection: connection(),
-        pending: { authorize_url: "https://example.com", state: "s" },
+        state: connection(),
+        authorize: { authorize_url: "https://example.com", state: "s" },
       },
     });
     const { calls } = await withMockedFetch([], () =>
@@ -388,7 +388,9 @@ Deno.test("connector callback requires pending authorization and clears it only 
       authorize_url: "https://example.com/authorize",
       state: "saved-secret",
     };
-    const test = testContext(globalArgs, { storedResources: { pending } });
+    const test = testContext(globalArgs, {
+      storedResources: { authorize: pending },
+    });
     let body: unknown;
     await withMockedFetch(
       async (req) => {
@@ -406,8 +408,8 @@ Deno.test("connector callback requires pending authorization and clears it only 
           ),
     );
     assertEquals(body, { code: "code", state: "saved-secret" });
-    assertEquals(test.getDeletedResources(), success ? ["pending"] : []);
+    assertEquals(test.getDeletedResources(), success ? ["authorize"] : []);
     assertEquals(test.getWrittenResources().length, success ? 1 : 0);
   }
-  assertEquals(model.resources.pending.schema.meta()?.sensitive, true);
+  assertEquals(model.resources.authorize.schema.meta()?.sensitive, true);
 });

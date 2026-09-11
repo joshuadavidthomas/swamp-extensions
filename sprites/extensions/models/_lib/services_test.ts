@@ -26,6 +26,6 @@ registerRouteCases([
     httpMethod: "GET",
     path: "/v1/sprites/demo%20sprite/services",
     response: json([service]),
-    output: "services",
+    output: "listServices",
   },
 ]);

@@ -345,11 +345,11 @@ export async function relayGateway(
 
 /** Gateway JSON resources for composition into the single-Sprite model. */
 export const gatewayResources = {
-  gatewayConnections: resource(
+  gatewayList: resource(
     GatewayList,
     "Gateway connections and available providers with source-defined open metadata",
   ),
-  gatewayResponse: resource(
+  gatewayRequest: resource(
     GatewayResponse,
     "Provider HTTP status and response headers",
     "7d",
@@ -357,29 +357,29 @@ export const gatewayResources = {
 };
 
 /** Binary provider response body. */
-export const gatewayFiles = { gatewayBody: BinaryFile };
+export const gatewayFiles = { gatewayRequestBody: BinaryFile };
 
 /** Connector gateway methods for composition into the single-Sprite model. */
 export const gatewayMethods = {
   gatewayList: method(
     "Discover connector access from inside the configured Sprite",
     z.object({}),
-    "gatewayConnections",
+    "gatewayList",
     GatewayList,
     (_args, ctx: SpriteContext) => discoverGateway(ctx),
   ),
   gatewayRequest: method(
     "Relay one provider path through a configured Sprite connector",
     GatewayRequestArgs,
-    "gatewayResponse",
+    "gatewayRequest",
     GatewayResponse,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
       const response = await relayGateway(ctx, args);
       ctx.signal.throwIfAborted();
       const bodyHandle = await ctx.createFileWriter(
-        "gatewayBody",
-        "gatewayBody",
+        "gatewayRequestBody",
+        "gatewayRequestBody",
       ).writeAll(response.body);
       return withHandles(response, [bodyHandle]);
     },

@@ -59,14 +59,14 @@ export async function checkpointStream(
 }
 
 export const checkpointsResources = {
-  checkpoints: resource(Checkpoints, "Sprite checkpoints"),
+  listCheckpoints: resource(Checkpoints, "Sprite checkpoints"),
 };
 
 export const checkpointsMethods = {
   listCheckpoints: method(
     "List Sprite checkpoints",
     Empty,
-    "checkpoints",
+    "listCheckpoints",
     Checkpoints,
     async (_args, ctx: SpriteContext) => ({
       checkpoints: await jsonRequest(

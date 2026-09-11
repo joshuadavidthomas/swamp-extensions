@@ -45,7 +45,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     listTasks: method(
       "List active task holds through the Sprite management socket",
       Empty,
-      "tasks",
+      "listTasks",
       Tasks,
       async (_args, ctx: SpriteContext) => {
         // Even local reads start a process. Require the saved identity for every exec.
@@ -56,7 +56,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
   };
 }
 export const tasksResources = {
-  tasks: resource(
+  listTasks: resource(
     Tasks,
     "Observed task holds; this snapshot does not keep a Sprite awake",
     "7d",

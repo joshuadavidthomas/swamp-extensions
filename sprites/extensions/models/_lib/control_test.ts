@@ -139,18 +139,18 @@ Deno.test("control exec reuses one socket and stores aggregate streams with per-
   const saved = await method(
     "Save execution",
     z.object({}),
-    "controlExecution",
-    controlResources.controlExecution.schema,
+    "controlExec",
+    controlResources.controlExec.schema,
     () => saveControlExecution(test.ctx, result),
   ).execute({}, test.ctx);
   assertEquals(saved.dataHandles.map((handle) => handle.name), [
-    "controlStdout",
-    "controlStderr",
-    "controlExecution",
+    "controlExecStdout",
+    "controlExecStderr",
+    "controlExec",
   ]);
   assertEquals(test.getWrittenFiles().map((file) => file.name), [
-    "controlStdout",
-    "controlStderr",
+    "controlExecStdout",
+    "controlExecStderr",
   ]);
   assertEquals(
     test.getWrittenResources()[0].data.operations,

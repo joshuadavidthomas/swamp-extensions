@@ -404,16 +404,22 @@ export async function saveControlExecution(
     stderrBytes: result.stderr.length,
     operations: result.operations,
   };
-  const stdout = await ctx.createFileWriter("controlStdout", "controlStdout")
+  const stdout = await ctx.createFileWriter(
+    "controlExecStdout",
+    "controlExecStdout",
+  )
     .writeAll(result.stdout);
-  const stderr = await ctx.createFileWriter("controlStderr", "controlStderr")
+  const stderr = await ctx.createFileWriter(
+    "controlExecStderr",
+    "controlExecStderr",
+  )
     .writeAll(result.stderr);
   return withHandles(data, [stdout, stderr]);
 }
 
 /** Seven-day exec-batch metadata; this does not claim proxy control coverage. */
 export const controlResources = {
-  controlExecution: resource(
+  controlExec: resource(
     ControlExecution,
     "Sequential control-channel exec result and artifact byte ranges",
     "7d",
@@ -421,15 +427,15 @@ export const controlResources = {
 };
 /** Fixed aggregate names avoid dynamic artifact-spec violations. */
 export const controlFiles = {
-  controlStdout: BinaryFile,
-  controlStderr: BinaryFile,
+  controlExecStdout: BinaryFile,
+  controlExecStderr: BinaryFile,
 };
 /** Persistent control-channel methods limited to the exec operation. */
 export const controlMethods = {
   controlExec: method(
     "Run bounded sequential exec operations over one persistent WebSocket",
     ControlExecArgs,
-    "controlExecution",
+    "controlExec",
     ControlExecution,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);

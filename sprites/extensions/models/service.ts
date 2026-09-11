@@ -64,10 +64,10 @@ export function createMethods(execute: ManagementExec = executeHttp) {
         }),
         duration: z.string().min(1).optional(),
       }),
-      "service",
+      "state",
       ServiceRecord,
       async (args, ctx: ServiceContext) => {
-        const sprite = await bindSprite(ctx, "service");
+        const sprite = await bindSprite(ctx);
         const events = await serviceStream(
           ctx,
           "PUT",
@@ -86,18 +86,17 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     get: method(
       "Read this service and save it",
       Empty,
-      "service",
+      "state",
       ServiceRecord,
-      async (_args, ctx: ServiceContext) =>
-        record(ctx, await bindSprite(ctx, "service")),
+      async (_args, ctx: ServiceContext) => record(ctx, await bindSprite(ctx)),
     ),
     start: method(
       "Start this service",
       z.object({ duration: z.string().min(1).optional() }),
-      "started",
+      "start",
       ServiceEvents,
       async (args, ctx: ServiceContext) => {
-        await boundSprite(ctx, "service");
+        await boundSprite(ctx);
         return await serviceStream(
           ctx,
           "POST",
@@ -110,10 +109,10 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     stop: method(
       "Stop this service",
       z.object({ timeout: z.string().min(1).optional() }),
-      "stopped",
+      "stop",
       ServiceEvents,
       async (args, ctx: ServiceContext) => {
-        await boundSprite(ctx, "service");
+        await boundSprite(ctx);
         return await serviceStream(
           ctx,
           "POST",
@@ -126,10 +125,10 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     restart: method(
       "Restart this service",
       z.object({ duration: z.string().min(1).optional() }),
-      "restarted",
+      "restart",
       ServiceEvents,
       async (args, ctx: ServiceContext) => {
-        await boundSprite(ctx, "service");
+        await boundSprite(ctx);
         return await serviceStream(
           ctx,
           "POST",
@@ -148,7 +147,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
       "logs",
       ServiceEvents,
       async (args, ctx: ServiceContext) => {
-        await boundSprite(ctx, "service");
+        await boundSprite(ctx);
         return await serviceStream(
           ctx,
           "GET",
@@ -164,7 +163,7 @@ export function createMethods(execute: ManagementExec = executeHttp) {
       z.object({ signal: z.string().min(1).max(32) }),
       null,
       async (args, ctx: ServiceContext) => {
-        await boundSprite(ctx, "service");
+        await boundSprite(ctx);
         await send(ctx, ctx.globalArgs.sprite, {
           method: "POST",
           path: "/v1/services/signal",
@@ -178,13 +177,13 @@ export function createMethods(execute: ManagementExec = executeHttp) {
       Empty,
       null,
       async (_args, ctx: ServiceContext) => {
-        await boundSprite(ctx, "service");
+        await boundSprite(ctx);
         try {
           await emptyRequest(ctx, "DELETE", path(ctx));
         } catch (error) {
           if (!(error instanceof ApiError && error.status === 404)) throw error;
         }
-        await ctx.deleteResource("service");
+        await ctx.deleteResource("state");
       },
     ),
   };
@@ -196,14 +195,14 @@ export const model = {
   version: "2026.09.11.1",
   globalArguments: ServiceArgsSchema,
   resources: {
-    service: resource(
+    state: resource(
       ServiceRecord,
       "This service's definition, last known status, and the Sprite it belongs to",
     ),
     put: resource(ServiceEvents, "Create or update progress", "7d"),
-    started: resource(ServiceEvents, "Start progress", "7d"),
-    stopped: resource(ServiceEvents, "Stop progress", "7d"),
-    restarted: resource(ServiceEvents, "Restart progress", "7d"),
+    start: resource(ServiceEvents, "Start progress", "7d"),
+    stop: resource(ServiceEvents, "Stop progress", "7d"),
+    restart: resource(ServiceEvents, "Restart progress", "7d"),
     logs: resource(ServiceEvents, "Log stream", "7d"),
   },
   methods: createMethods(),

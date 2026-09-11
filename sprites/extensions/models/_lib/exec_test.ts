@@ -80,14 +80,14 @@ Deno.test("WebSocket exec preserves binary streams, repeated argv/env, stdin EOF
   const saved = await method(
     "Save execution",
     z.object({}),
-    "execution",
-    execResources.execution.schema,
-    () => saveExecution(test.ctx, result, true),
+    "exec",
+    execResources.exec.schema,
+    () => saveExecution(test.ctx, result, true, "exec"),
   ).execute({}, test.ctx);
   assertEquals(saved.dataHandles.map((handle) => handle.name), [
-    "stdout",
-    "stderr",
-    "execution",
+    "execStdout",
+    "execStderr",
+    "exec",
   ]);
   assertEquals(test.getWrittenFiles().length, 2);
   assertEquals(test.getWrittenResources()[0].data.stdoutBytes, 2);
@@ -222,7 +222,7 @@ Deno.test("attachment takes TTY mode from session_info and handles JSON exit", a
   assertEquals(result.stdout, new Uint8Array([0, 1, 2, 255]));
   assertEquals(result.exitCode, 9);
   await assertRejects(
-    () => saveExecution(test.ctx, result, true),
+    () => saveExecution(test.ctx, result, true, "exec"),
     Error,
     "code 9",
   );
@@ -230,9 +230,9 @@ Deno.test("attachment takes TTY mode from session_info and handles JSON exit", a
   await method(
     "Save execution",
     z.object({}),
-    "execution",
-    execResources.execution.schema,
-    () => saveExecution(test.ctx, result, false),
+    "attach",
+    execResources.attach.schema,
+    () => saveExecution(test.ctx, result, false, "attach"),
   ).execute({}, test.ctx);
   assertEquals(test.getWrittenResources()[0].data.exitCode, 9);
 });

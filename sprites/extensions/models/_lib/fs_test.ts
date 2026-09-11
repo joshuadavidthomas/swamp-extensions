@@ -34,7 +34,7 @@ const routeCases: RouteCase[] = [
       }],
       count: 1,
     }),
-    output: "files",
+    output: "listFiles",
   },
   {
     name: "writeFile",
@@ -50,7 +50,7 @@ const routeCases: RouteCase[] = [
       "/v1/sprites/demo%20sprite/fs/write?path=a.bin&workingDir=%2Fapp&mode=0640&mkdir=true",
     response: json({ path: "/app/a.bin", size: 5, mode: "0640" }),
     verifies: true,
-    output: "fileWritten",
+    output: "writeFile",
   },
   {
     name: "deleteFile",
@@ -59,7 +59,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/fs/delete",
     response: json({ deleted: ["/app/old"], count: 1 }),
     verifies: true,
-    output: "fileDeleted",
+    output: "deleteFile",
   },
   {
     name: "copyFile",
@@ -79,7 +79,7 @@ const routeCases: RouteCase[] = [
       totalBytes: 5,
     }),
     verifies: true,
-    output: "fileCopied",
+    output: "copyFile",
   },
   {
     name: "renameFile",
@@ -88,7 +88,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/fs/rename",
     response: json({ source: "/app/a", dest: "/app/b" }),
     verifies: true,
-    output: "fileRenamed",
+    output: "renameFile",
   },
   {
     name: "chmodFile",
@@ -103,7 +103,7 @@ const routeCases: RouteCase[] = [
     path: "/v1/sprites/demo%20sprite/fs/chmod",
     response: json({ affected: [{ path: "/app/a", mode: "0755" }], count: 1 }),
     verifies: true,
-    output: "fileModeChanged",
+    output: "chmodFile",
   },
   {
     name: "chownFile",
@@ -122,7 +122,7 @@ const routeCases: RouteCase[] = [
       count: 1,
     }),
     verifies: true,
-    output: "fileOwnerChanged",
+    output: "chownFile",
   },
 ];
 

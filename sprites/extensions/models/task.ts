@@ -36,10 +36,10 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     create: method(
       "Create a task hold; an existing name fails rather than being refreshed",
       z.object({ expire: TaskExpiry }),
-      "task",
+      "state",
       TaskRecord,
       async (args, ctx: TaskContext) => {
-        const sprite = await bindSprite(ctx, "task");
+        const sprite = await bindSprite(ctx);
         await send(ctx, ctx.globalArgs.sprite, {
           method: "POST",
           path: "/v1/tasks",
@@ -52,18 +52,17 @@ export function createMethods(execute: ManagementExec = executeHttp) {
     get: method(
       "Read an active task hold and save it",
       Empty,
-      "task",
+      "state",
       TaskRecord,
-      async (_args, ctx: TaskContext) =>
-        record(ctx, await bindSprite(ctx, "task")),
+      async (_args, ctx: TaskContext) => record(ctx, await bindSprite(ctx)),
     ),
     refresh: method(
       "Refresh this task hold, or create it if absent",
       z.object({ expire: TaskExpiry }),
-      "task",
+      "state",
       TaskRecord,
       async (args, ctx: TaskContext) => {
-        const sprite = await boundSprite(ctx, "task");
+        const sprite = await boundSprite(ctx);
         await send(ctx, ctx.globalArgs.sprite, {
           method: "PUT",
           path: path(ctx),
@@ -78,13 +77,13 @@ export function createMethods(execute: ManagementExec = executeHttp) {
       Empty,
       null,
       async (_args, ctx: TaskContext) => {
-        await boundSprite(ctx, "task");
+        await boundSprite(ctx);
         await send(ctx, ctx.globalArgs.sprite, {
           method: "DELETE",
           path: path(ctx),
           statuses: [204, 404],
         }, execute);
-        await ctx.deleteResource("task");
+        await ctx.deleteResource("state");
       },
     ),
   };
@@ -96,7 +95,7 @@ export const model = {
   version: "2026.09.11.1",
   globalArguments: TaskArgsSchema,
   resources: {
-    task: resource(
+    state: resource(
       TaskRecord,
       "Observed task expiry and its Sprite identity; refresh explicitly when needed",
     ),

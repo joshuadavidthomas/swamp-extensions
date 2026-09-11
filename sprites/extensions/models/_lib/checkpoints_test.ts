@@ -12,5 +12,5 @@ registerRouteCases([{
   httpMethod: "GET",
   path: "/v1/sprites/demo%20sprite/checkpoints",
   response: json([checkpoint]),
-  output: "checkpoints",
+  output: "listCheckpoints",
 }]);
