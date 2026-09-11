@@ -19,6 +19,7 @@ import {
   method,
   resource,
   ResponseLimitError,
+  withHandles,
 } from "./_lib/core.ts";
 
 import { connectorsMethods, connectorsResources } from "./_lib/connectors.ts";
@@ -84,6 +85,10 @@ const RolloutResult = z.object({
   id: z.string(),
   status: z.enum(["applied", "failed"]),
   error: z.string().optional(),
+});
+const SpriteNetworkPolicy = RolloutResult.extend({
+  policy: NetworkPolicy,
+  observedAt: z.iso.datetime({ offset: true }),
 });
 const NetworkPolicyRollout = z.object({
   select: z.object({
@@ -227,6 +232,10 @@ export const model = {
       NetworkPolicyRollout,
       "Which Sprites the last network policy rollout matched, applied to, and failed on",
     ),
+    spriteNetworkPolicy: resource(
+      SpriteNetworkPolicy,
+      "One Sprite's outcome from the last network policy rollout that matched it; instance name networkPolicy-<sprite>",
+    ),
     sprites: resource(
       InventorySchema,
       "Current Sprites and capacity limits for one organization",
@@ -272,7 +281,7 @@ export const model = {
       },
     ),
     setNetworkPolicy: method(
-      "Replace the network policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue",
+      "Replace the network policy on every Sprite the selector matches; a failed Sprite is recorded and the rest continue; each Sprite's outcome is also saved as networkPolicy-<sprite>",
       z.object({ select: SpriteSelector, policy: NetworkPolicy }),
       "networkPolicyRollout",
       NetworkPolicyRollout,
@@ -286,7 +295,10 @@ export const model = {
           wanted.every((label) => sprite.labels?.includes(label))
         );
         const results: z.input<typeof RolloutResult>[] = [];
+        const handles = [];
+        const observedAt = new Date().toISOString();
         for (const sprite of matched) {
+          let row: z.input<typeof RolloutResult>;
           try {
             await emptyRequest(
               context,
@@ -294,22 +306,34 @@ export const model = {
               spritePath(sprite.name, "/policy/network"),
               { json: args.policy },
             );
-            results.push({
+            row = {
               name: sprite.name,
               id: sprite.id,
               status: "applied",
-            });
+            };
           } catch (error) {
             if (context.signal.aborted) throw error;
-            results.push({
+            row = {
               name: sprite.name,
               id: sprite.id,
               status: "failed",
               error: error instanceof ApiError
                 ? `HTTP ${error.status}`
                 : "request failed",
-            });
+            };
           }
+          results.push(row);
+          handles.push(
+            await context.writeResource(
+              "spriteNetworkPolicy",
+              `networkPolicy-${sprite.name}`,
+              SpriteNetworkPolicy.parse({
+                ...row,
+                policy: args.policy,
+                observedAt,
+              }),
+            ),
+          );
         }
         const applied =
           results.filter((result) => result.status === "applied").length;
@@ -317,15 +341,16 @@ export const model = {
           "Applied network policy to {applied} of {matched} Sprites",
           { applied, matched: matched.length },
         );
-        return {
+        const summary = {
           select: args.select,
           policy: args.policy,
           matched: matched.length,
           applied,
           failed: matched.length - applied,
           results,
-          observedAt: new Date().toISOString(),
+          observedAt,
         };
+        return withHandles(summary, handles);
       },
     ),
   },

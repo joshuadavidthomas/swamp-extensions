@@ -107,7 +107,9 @@ Reference stored results in model definitions with CEL, for example
 - Organization `setNetworkPolicy` matches Sprites by prefix or labels at call
   time and applies the policy one Sprite at a time. It records failures per
   Sprite instead of stopping and does not check any Sprite instance's saved
-  identity.
+  identity. Each Sprite's outcome is also saved as its own record named
+  `networkPolicy-<sprite>`, so one Sprite's result can be read directly and
+  keeps its own history.
 
 ## Development
 

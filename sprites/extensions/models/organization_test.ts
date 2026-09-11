@@ -534,11 +534,15 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
     "/v1/sprites/worker-2/policy/network",
   ]);
   assertEquals(bodies, [networkPolicy, networkPolicy]);
-  assertEquals(result.dataHandles[0].name, "networkPolicyRollout");
+  assertEquals(result.dataHandles.map((handle) => handle.name), [
+    "networkPolicy-worker-1",
+    "networkPolicy-worker-2",
+    "networkPolicyRollout",
+  ]);
   const writes = context.getWrittenResources();
-  assertEquals(writes.length, 1);
-  assertEquals(writes[0].specName, "networkPolicyRollout");
-  assertEquals(writes[0].data, {
+  assertEquals(writes.length, 3);
+  assertEquals(writes[2].specName, "networkPolicyRollout");
+  assertEquals(writes[2].data, {
     select: { prefix: "worker-" },
     policy: networkPolicy,
     matched: 2,
@@ -549,9 +553,20 @@ Deno.test("setNetworkPolicy selects by API prefix across pages and applies in li
       id: `sprite-${index}`,
       status: "applied",
     })),
-    observedAt: writes[0].data.observedAt,
+    observedAt: writes[2].data.observedAt,
   });
-  assertEquals(typeof writes[0].data.observedAt, "string");
+  assertEquals(typeof writes[2].data.observedAt, "string");
+  for (const [offset, index] of [1, 2].entries()) {
+    assertEquals(writes[offset].specName, "spriteNetworkPolicy");
+    assertEquals(writes[offset].name, `networkPolicy-worker-${index}`);
+    assertEquals(writes[offset].data, {
+      name: `worker-${index}`,
+      id: `sprite-${index}`,
+      status: "applied",
+      policy: networkPolicy,
+      observedAt: writes[2].data.observedAt,
+    });
+  }
 });
 
 Deno.test("setNetworkPolicy requires every selected label", async () => {
@@ -581,7 +596,7 @@ Deno.test("setNetworkPolicy requires every selected label", async () => {
     "/v1/sprites/worker-1/policy/network",
     "/v1/sprites/worker-4/policy/network",
   ]);
-  const rollout = context.getWrittenResources()[0].data;
+  const rollout = context.getWrittenResources().at(-1)!.data;
   assertEquals(rollout.matched, 2);
   assertEquals(rollout.select, { labels: ["ci", "prod"] });
 });
@@ -615,7 +630,7 @@ Deno.test("setNetworkPolicy all omits prefix and records a failure without retry
     calls.slice(1).map((call) => new URL(call.url).pathname),
     [1, 2, 3].map((index) => `/v1/sprites/worker-${index}/policy/network`),
   );
-  const rollout = context.getWrittenResources()[0].data;
+  const rollout = context.getWrittenResources().at(-1)!.data;
   assertEquals(rollout.matched, 3);
   assertEquals(rollout.applied, 2);
   assertEquals(rollout.failed, 1);
@@ -624,6 +639,17 @@ Deno.test("setNetworkPolicy all omits prefix and records a failure without retry
     { name: "worker-2", id: "sprite-2", status: "failed", error: "HTTP 500" },
     { name: "worker-3", id: "sprite-3", status: "applied" },
   ]);
+  const failed = context.getWrittenResources()[1];
+  assertEquals(failed.specName, "spriteNetworkPolicy");
+  assertEquals(failed.name, "networkPolicy-worker-2");
+  assertEquals(failed.data, {
+    name: "worker-2",
+    id: "sprite-2",
+    status: "failed",
+    error: "HTTP 500",
+    policy: networkPolicy,
+    observedAt: rollout.observedAt,
+  });
 });
 
 Deno.test("setNetworkPolicy hides unsanitized response-body cancellation errors", async () => {
@@ -645,7 +671,7 @@ Deno.test("setNetworkPolicy hides unsanitized response-body cancellation errors"
         policy: networkPolicy,
       }, context),
   );
-  assertEquals(context.getWrittenResources()[0].data.results, [
+  assertEquals(context.getWrittenResources().at(-1)!.data.results, [
     {
       name: "worker-1",
       id: "sprite-1",
@@ -655,7 +681,7 @@ Deno.test("setNetworkPolicy hides unsanitized response-body cancellation errors"
   ]);
 });
 
-Deno.test("setNetworkPolicy parent cancellation mid-rollout rejects without writing", async () => {
+Deno.test("setNetworkPolicy parent cancellation mid-rollout preserves completed rows without a summary", async () => {
   const controller = new AbortController();
   const context = testContext(globalArgs, { signal: controller.signal });
   let posts = 0;
@@ -685,7 +711,18 @@ Deno.test("setNetworkPolicy parent cancellation mid-rollout rejects without writ
       ),
   );
   assertEquals(calls.map((call) => call.method), ["GET", "POST", "POST"]);
-  assertEquals(context.getWrittenResources(), []);
+  const writes = context.getWrittenResources();
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].specName, "spriteNetworkPolicy");
+  assertEquals(writes[0].name, "networkPolicy-worker-1");
+  assertEquals(writes[0].data, {
+    name: "worker-1",
+    id: "sprite-1",
+    status: "applied",
+    policy: networkPolicy,
+    observedAt: writes[0].data.observedAt,
+  });
+  assertEquals(typeof writes[0].data.observedAt, "string");
 });
 
 Deno.test("setNetworkPolicy selector rejects missing and conflicting selections", () => {
