@@ -6,10 +6,17 @@ import type { IncomingMessage } from "node:http";
 import { Duplex } from "node:stream";
 import * as tls from "node:tls";
 import { z } from "zod";
-import { BinaryFile, resource, type Result, segment } from "./core.ts";
+import {
+  BinaryFile,
+  concatenate,
+  method,
+  resource,
+  segment,
+  withHandles,
+} from "./core.ts";
 import { Input, inputBytes } from "./exec.ts";
 import { type SpriteContext, verifySprite } from "./sprite-api.ts";
-import { connectProxy } from "./watch-proxy.ts";
+import { connectExecProxy } from "./proxy.ts";
 
 const GATEWAY_HOST = "api.sprites.dev";
 const GATEWAY_PORT = 443;
@@ -31,11 +38,10 @@ const AvailableProvider = z.object({
 }).and(OpenJsonObject).describe(
   "Source-defined available-provider entry. setup_url is known and unpublished provider metadata is retained.",
 );
-const ApiGatewayList = z.object({
+const GatewayList = z.object({
   connections: z.array(GatewayConnection),
   available: z.array(AvailableProvider),
 });
-const GatewayList = ApiGatewayList.extend({ truncated: z.literal(false) });
 
 const ProviderMethod = z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).refine(
   (value) => value.toUpperCase() !== "CONNECT",
@@ -88,7 +94,7 @@ export type GatewayHttpResponse = z.output<typeof GatewayResponse> & {
 };
 /** Injectable TCP, TLS, and HTTPS boundaries used by gateway protocol tests. */
 export type GatewayDependencies = {
-  connect?: typeof connectProxy;
+  connect?: typeof connectExecProxy;
   connectTls?: typeof tls.connect;
   request?: typeof https.request;
 };
@@ -141,7 +147,7 @@ async function secureTunnel(
   ctx: SpriteContext,
   dependencies: GatewayDependencies,
 ): Promise<{ raw: Duplex; socket: tls.TLSSocket }> {
-  const raw = await (dependencies.connect ?? connectProxy)(
+  const raw = await (dependencies.connect ?? connectExecProxy)(
     ctx,
     GATEWAY_HOST,
     GATEWAY_PORT,
@@ -268,12 +274,7 @@ export async function requestGateway(
       }
       chunks.push(chunk);
     }
-    const body = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.length;
-    }
+    const body = concatenate(chunks);
     return {
       status: incoming.statusCode ?? 0,
       statusText: incoming.statusMessage ?? "",
@@ -326,7 +327,7 @@ export async function discoverGateway(
     const value = JSON.parse(
       new TextDecoder("utf-8", { fatal: true }).decode(response.body),
     );
-    return { ...ApiGatewayList.parse(value), truncated: false };
+    return GatewayList.parse(value);
   } catch {
     throw new Error(
       "Sprite gateway discovery returned invalid JSON for its source-defined schema.",
@@ -337,10 +338,9 @@ export async function discoverGateway(
 /** Build and send one provider relay while keeping the destination on the fixed gateway host. */
 export async function relayGateway(
   ctx: SpriteContext,
-  input: z.input<typeof GatewayRequestArgs>,
+  args: z.output<typeof GatewayRequestArgs>,
   requester: GatewayRequester = requestGateway,
 ): Promise<GatewayHttpResponse> {
-  const args = GatewayRequestArgs.parse(input);
   const body = await inputBytes(args.input);
   if (body.length > ctx.globalArgs.maxResponseBytes) {
     throw new Error(
@@ -373,54 +373,27 @@ export const gatewayFiles = { gatewayBody: BinaryFile };
 
 /** Connector gateway methods for composition into the single-Sprite model. */
 export const gatewayMethods = {
-  gatewayList: {
-    description: "Discover connector access from inside the configured Sprite",
-    arguments: z.object({}),
-    execute: async (
-      _input: Record<string, never>,
-      ctx: SpriteContext,
-    ): Promise<Result> => {
-      ctx.logger.info("Reading Sprite connector gateway discovery");
-      const output = await discoverGateway(ctx);
-      ctx.signal.throwIfAborted();
-      const handle = await ctx.writeResource(
-        "gatewayConnections",
-        "gatewayConnections",
-        output,
-      );
-      ctx.logger.info("Read Sprite connector gateway discovery");
-      return { dataHandles: [handle] };
-    },
-  },
-  gatewayRequest: {
-    description:
-      "Relay one provider path through a configured Sprite connector",
-    arguments: GatewayRequestArgs,
-    execute: async (
-      input: z.input<typeof GatewayRequestArgs>,
-      ctx: SpriteContext,
-    ): Promise<Result> => {
-      const args = GatewayRequestArgs.parse(input);
-      checkedHeaders(args.headers);
-      gatewayPath(args.provider, args.connection_id, args.providerPath);
-      ctx.logger.info("Sending Sprite connector gateway request");
+  gatewayList: method(
+    "Discover connector access from inside the configured Sprite",
+    z.object({}),
+    "gatewayConnections",
+    GatewayList,
+    (_args, ctx: SpriteContext) => discoverGateway(ctx),
+  ),
+  gatewayRequest: method(
+    "Relay one provider path through a configured Sprite connector",
+    GatewayRequestArgs,
+    "gatewayResponse",
+    GatewayResponse,
+    async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
       const response = await relayGateway(ctx, args);
       ctx.signal.throwIfAborted();
-      const metadata = GatewayResponse.parse(response);
       const bodyHandle = await ctx.createFileWriter(
         "gatewayBody",
         "gatewayBody",
       ).writeAll(response.body);
-      const metadataHandle = await ctx.writeResource(
-        "gatewayResponse",
-        "gatewayResponse",
-        metadata,
-      );
-      ctx.logger.info("Received Sprite connector gateway response", {
-        status: metadata.status,
-      });
-      return { dataHandles: [metadataHandle, bodyHandle] };
+      return withHandles(response, [bodyHandle]);
     },
-  },
+  ),
 };

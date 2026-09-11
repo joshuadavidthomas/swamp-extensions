@@ -85,9 +85,8 @@ Reference stored results in model definitions with CEL, for example
 - `getService`, `signalService`, and task methods use `/usr/bin/curl` against
   `/.sprite/api.sock` through authenticated exec. They require a saved Sprite
   identity. The organization token stays outside the Sprite.
-- Sized TTY commands and the default exec-backed TCP proxy require
-  `/.sprite/bin/python3`. Keep `proxy.transport` at `exec` when clients need TCP
-  EOF; native `proxy` and `control` modes currently fail to forward closure.
+- The TCP proxy runs over an authenticated exec relay and requires
+  `/.sprite/bin/python3` inside the Sprite. Sized TTY commands also require it.
 - Stopping a service does not prevent its startup after reboot. Delete its
   definition for that. Explicitly stopped HTTP services need `startService` to
   resume; an incoming request alone does not start them.

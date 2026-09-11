@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: MIT
-import { type ConnectChannel as Connect } from "./socket.ts";
+import { method } from "./core.ts";
+import { z } from "zod";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createModelTestContext } from "@swamp-club/swamp-testing";
-import { AttachArgs, ExecArgs, executeSocket, saveExecution } from "./exec.ts";
+import {
+  AttachArgs,
+  ExecArgs,
+  execResources,
+  executeSocket,
+  saveExecution,
+} from "./exec.ts";
 import { decodeHttpExec } from "./exec-http.ts";
-import { type Channel, type Message } from "./socket.ts";
+import { type Channel, type ConnectChannel, type Message } from "./socket.ts";
 import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
 import { TERMINAL_PROGRAM, TERMINAL_PYTHON } from "./terminal.ts";
 
@@ -43,7 +50,7 @@ function setup(messages: Message[]) {
     },
     closeCode: () => 1000,
   };
-  const connect: Connect = (_ctx, path, value) => {
+  const connect: ConnectChannel = (_ctx, path, value) => {
     connectedPath = path;
     query = value;
     return Promise.resolve(channel);
@@ -82,11 +89,17 @@ Deno.test("WebSocket exec preserves binary streams, repeated argv/env, stdin EOF
   assertEquals(result.exitCode, 0);
   assertEquals(result.sessionId, "7");
   assert(test.closed());
-  const saved = await saveExecution(test.ctx, result, true);
-  assertEquals(saved.dataHandles.map((handle) => handle.name), [
+  const saved = await method(
+    "Save execution",
+    z.object({}),
     "execution",
+    execResources.execution.schema,
+    () => saveExecution(test.ctx, result, true),
+  ).execute({}, test.ctx);
+  assertEquals(saved.dataHandles.map((handle) => handle.name), [
     "stdout",
     "stderr",
+    "execution",
   ]);
   assertEquals(test.getWrittenFiles().length, 2);
   assertEquals(test.getWrittenResources()[0].data.stdoutBytes, 2);
@@ -225,7 +238,13 @@ Deno.test("attachment takes TTY mode from session_info and handles JSON exit", a
     "code 9",
   );
   assertEquals(test.getWrittenFiles(), []);
-  await saveExecution(test.ctx, result, false);
+  await method(
+    "Save execution",
+    z.object({}),
+    "execution",
+    execResources.execution.schema,
+    () => saveExecution(test.ctx, result, false),
+  ).execute({}, test.ctx);
   assertEquals(test.getWrittenResources()[0].data.exitCode, 9);
 });
 Deno.test("exec refuses disconnect without exit, bad frames, wrong session, and response overrun", async () => {

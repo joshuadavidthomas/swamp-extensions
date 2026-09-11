@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: MIT
-/** Persistent control-channel support for bounded sequential exec operations only. Proxy control operations are outside this module's scope. @module */
+/** Bounded sequential exec operations over a persistent control channel. @module */
 import { z } from "zod";
-import { BinaryFile, concatenate, resource, type Result } from "./core.ts";
+import {
+  BinaryFile,
+  concatenate,
+  deadline,
+  method,
+  resource,
+  withHandles,
+} from "./core.ts";
 import { ExecArgs, inputBytes } from "./exec.ts";
 import { type Channel, type ConnectChannel, openChannel } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
+import { decodeStreamFrame } from "./exec-http.ts";
 import { initializeTerminal } from "./terminal.ts";
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -82,14 +90,6 @@ type RaceResult =
   | AbortResult;
 
 const TIMEOUT_MESSAGE = "Control exec was cancelled or exceeded timeoutMs.";
-
-function throwIfDeadlineElapsed(
-  signal: AbortSignal,
-  deadlineAt: number,
-): void {
-  signal.throwIfAborted();
-  if (performance.now() >= deadlineAt) throw new Error(TIMEOUT_MESSAGE);
-}
 
 function validateOperation(operation: Operation): void {
   if (
@@ -177,10 +177,8 @@ async function sendAction(
   operation: Operation,
   action: Action,
   abort: Promise<AbortResult>,
-  signal: AbortSignal,
-  deadlineAt: number,
+  budget: ReturnType<typeof deadline>,
 ): Promise<void> {
-  throwIfDeadlineElapsed(signal, deadlineAt);
   let payload: Uint8Array | string;
   if (action.type === "stdin") {
     const bytes = await inputBytes(action.input);
@@ -199,7 +197,7 @@ async function sendAction(
       signal: action.signal,
     });
   }
-  throwIfDeadlineElapsed(signal, deadlineAt);
+  budget.check(TIMEOUT_MESSAGE);
   const outcome = await Promise.race([
     channel.send(payload).then(() => ({ type: "action" } as const)),
     abort,
@@ -212,11 +210,10 @@ async function runOperation(
   operation: Operation,
   account: (length: number) => void,
   abort: Promise<AbortResult>,
-  signal: AbortSignal,
-  deadlineAt: number,
+  budget: ReturnType<typeof deadline>,
 ): Promise<{ stdout: Uint8Array; stderr: Uint8Array; exitCode: number }> {
   const frame = startFrame(operation);
-  throwIfDeadlineElapsed(signal, deadlineAt);
+  budget.check(TIMEOUT_MESSAGE);
   await Promise.race([
     channel.send(frame).then(
       () => ({ type: "action" } as const),
@@ -225,7 +222,7 @@ async function runOperation(
   ]).then((outcome) => {
     if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
   });
-  throwIfDeadlineElapsed(signal, deadlineAt);
+  budget.check(TIMEOUT_MESSAGE);
   const started = performance.now();
   const stdout: Uint8Array[] = [];
   const stderr: Uint8Array[] = [];
@@ -248,7 +245,7 @@ async function runOperation(
     .map(({ action }) => action);
   let actionIndex = 0;
   const sendInput = async (bytes: Uint8Array): Promise<void> => {
-    throwIfDeadlineElapsed(signal, deadlineAt);
+    budget.check(TIMEOUT_MESSAGE);
     const payload = operation.tty
       ? bytes
       : concatenate([new Uint8Array([0]), bytes]);
@@ -257,7 +254,7 @@ async function runOperation(
       abort,
     ]);
     if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
-    throwIfDeadlineElapsed(signal, deadlineAt);
+    budget.check(TIMEOUT_MESSAGE);
   };
   if (operation.input !== undefined) {
     await sendInput(await inputBytes(operation.input));
@@ -273,14 +270,13 @@ async function runOperation(
       operation,
       { type: "eof", atMs: 0 },
       abort,
-      signal,
-      deadlineAt,
+      budget,
     );
   }
 
   let pendingRead = channel.read();
   while (true) {
-    throwIfDeadlineElapsed(signal, deadlineAt);
+    budget.check(TIMEOUT_MESSAGE);
     const nextAction = actions[actionIndex];
     const actionRemaining = nextAction === undefined
       ? Number.POSITIVE_INFINITY
@@ -291,15 +287,13 @@ async function runOperation(
         operation,
         nextAction,
         abort,
-        signal,
-        deadlineAt,
+        budget,
       );
-      throwIfDeadlineElapsed(signal, deadlineAt);
       actionIndex++;
       continue;
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadlineRemaining = Math.max(0, deadlineAt - performance.now());
+    const deadlineRemaining = budget.remainingMs();
     const wake = nextAction === undefined
       ? new Promise<RaceResult>(() => {})
       : new Promise<RaceResult>((resolve) => {
@@ -319,7 +313,7 @@ async function runOperation(
       if (timer !== undefined) clearTimeout(timer);
     }
     if (outcome.type === "abort") throw new Error(TIMEOUT_MESSAGE);
-    throwIfDeadlineElapsed(signal, deadlineAt);
+    budget.check(TIMEOUT_MESSAGE);
     if (outcome.type === "wake") continue;
     const message = outcome.message;
     if (message === null) {
@@ -332,26 +326,23 @@ async function runOperation(
       if (operation.tty) {
         stdout.push(message.bytes);
       } else {
-        const stream = message.bytes[0];
-        if ((stream === 1 || stream === 2) && message.bytes.length >= 1) {
+        const frame = decodeStreamFrame(message.bytes);
+        if (frame.kind === "exit") {
+          nativeExit = recordExit("binary", frame.code);
+          actionIndex = actions.length;
+        } else {
           if (nativeExit !== undefined) {
             throw new Error(
               "Control exec returned output after its exit frame.",
             );
           }
-          (stream === 1 ? stdout : stderr).push(message.bytes.slice(1));
-        } else if (stream === 3 && message.bytes.length === 2) {
-          nativeExit = recordExit("binary", message.bytes[1]);
-          actionIndex = actions.length;
-        } else {
-          throw new Error("Control exec returned an invalid binary frame.");
+          (frame.kind === "stdout" ? stdout : stderr).push(frame.data);
         }
       }
       pendingRead = channel.read();
       continue;
     }
     const control = parseControl(message.bytes);
-    throwIfDeadlineElapsed(signal, deadlineAt);
     if (control.type === "op.error") {
       throw new Error(
         "Control exec reported an operation error; no partial output was saved.",
@@ -381,13 +372,11 @@ async function runOperation(
     if (exitCode === undefined) {
       throw new Error("Control exec completed without an exit status.");
     }
-    throwIfDeadlineElapsed(signal, deadlineAt);
     const result = {
       stdout: concatenate(stdout),
       stderr: concatenate(stderr),
       exitCode,
     };
-    throwIfDeadlineElapsed(signal, deadlineAt);
     return result;
   }
 }
@@ -395,27 +384,21 @@ async function runOperation(
 /** Run exec operations sequentially on one authenticated persistent WebSocket. */
 export async function executeControl(
   ctx: SpriteContext,
-  input: z.output<typeof ControlExecArgs>,
+  args: z.output<typeof ControlExecArgs>,
   connect: ConnectChannel = openChannel,
 ): Promise<ControlExecResult> {
-  const args = ControlExecArgs.parse(input);
   for (const operation of args.operations) validateOperation(operation);
-  ctx.signal.throwIfAborted();
-  const deadlineAt = performance.now() + ctx.globalArgs.timeoutMs;
-  const timeout = new AbortController();
-  const timer = setTimeout(
-    () => timeout.abort(new Error("Control exec exceeded timeoutMs.")),
-    ctx.globalArgs.timeoutMs,
-  );
-  const signal = AbortSignal.any([ctx.signal, timeout.signal]);
+  const budget = deadline(ctx);
+  const { signal } = budget;
   let channel: Channel | undefined;
   let onAbort: (() => void) | undefined;
   try {
+    budget.check(TIMEOUT_MESSAGE);
     channel = await connect(
       { ...ctx, signal },
       spritePath(ctx, "/control"),
     );
-    throwIfDeadlineElapsed(signal, deadlineAt);
+    budget.check(TIMEOUT_MESSAGE);
     let received = 0;
     const account = (length: number): void => {
       received += length;
@@ -441,17 +424,15 @@ export async function executeControl(
     let stdoutOffset = 0;
     let stderrOffset = 0;
     for (let index = 0; index < args.operations.length; index++) {
-      throwIfDeadlineElapsed(signal, deadlineAt);
       const operation = args.operations[index];
       const result = await runOperation(
         channel,
         operation,
         account,
         abort,
-        signal,
-        deadlineAt,
+        budget,
       );
-      throwIfDeadlineElapsed(signal, deadlineAt);
+      budget.check(TIMEOUT_MESSAGE);
       if (operation.failOnNonZero && result.exitCode !== 0) {
         throw new Error(
           `Control exec operation ${
@@ -473,16 +454,14 @@ export async function executeControl(
       stdoutOffset += result.stdout.length;
       stderrOffset += result.stderr.length;
     }
-    throwIfDeadlineElapsed(signal, deadlineAt);
     const result = {
       operations,
       stdout: concatenate(stdout),
       stderr: concatenate(stderr),
     };
-    throwIfDeadlineElapsed(signal, deadlineAt);
     return result;
   } finally {
-    clearTimeout(timer);
+    budget.dispose();
     if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
     await channel?.close();
   }
@@ -492,24 +471,19 @@ export async function executeControl(
 export async function saveControlExecution(
   ctx: SpriteContext,
   result: ControlExecResult,
-): Promise<Result> {
+) {
   ctx.signal.throwIfAborted();
-  const data = ControlExecution.parse({
+  const data = {
     operationCount: result.operations.length,
     stdoutBytes: result.stdout.length,
     stderrBytes: result.stderr.length,
     operations: result.operations,
-  });
+  };
   const stdout = await ctx.createFileWriter("controlStdout", "controlStdout")
     .writeAll(result.stdout);
   const stderr = await ctx.createFileWriter("controlStderr", "controlStderr")
     .writeAll(result.stderr);
-  const metadata = await ctx.writeResource(
-    "controlExecution",
-    "controlExecution",
-    data,
-  );
-  return { dataHandles: [metadata, stdout, stderr] };
+  return withHandles(data, [stdout, stderr]);
 }
 
 /** Seven-day exec-batch metadata; this does not claim proxy control coverage. */
@@ -527,23 +501,14 @@ export const controlFiles = {
 };
 /** Persistent control-channel methods limited to the exec operation. */
 export const controlMethods = {
-  controlExec: {
-    description:
-      "Run bounded sequential exec operations over one persistent WebSocket",
-    arguments: ControlExecArgs,
-    execute: async (
-      input: z.output<typeof ControlExecArgs>,
-      ctx: SpriteContext,
-    ): Promise<Result> => {
-      const args = ControlExecArgs.parse(input);
-      ctx.logger.info("Starting Sprite control exec sequence");
+  controlExec: method(
+    "Run bounded sequential exec operations over one persistent WebSocket",
+    ControlExecArgs,
+    "controlExecution",
+    ControlExecution,
+    async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const result = await saveControlExecution(
-        ctx,
-        await executeControl(ctx, args),
-      );
-      ctx.logger.info("Finished Sprite control exec sequence");
-      return result;
+      return await saveControlExecution(ctx, await executeControl(ctx, args));
     },
-  },
+  ),
 };

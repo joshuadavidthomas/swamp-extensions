@@ -130,7 +130,6 @@ Deno.test("sessions use the provider object envelope and ownership requires nume
   );
   assertEquals(test.getWrittenResources()[0].data, {
     sessions: [],
-    truncated: false,
   });
   assertEquals(
     model.methods.chownFile.arguments.safeParse({
@@ -170,7 +169,6 @@ Deno.test("nonempty session envelopes preserve the typed session fields", async 
   );
   assertEquals(test.getWrittenResources()[0].data, {
     sessions: [session],
-    truncated: false,
   });
 });
 

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { method } from "./core.ts";
+import { z } from "zod";
 import { type ConnectChannel } from "./socket.ts";
 import {
   assert,
@@ -10,6 +12,7 @@ import {
 import { createModelTestContext } from "@swamp-club/swamp-testing";
 import {
   ControlExecArgs,
+  controlResources,
   executeControl,
   saveControlExecution,
 } from "./control.ts";
@@ -152,11 +155,17 @@ Deno.test("control exec reuses one socket and stores aggregate streams with per-
   }]);
   assertEquals(test.closed(), 1);
 
-  const saved = await saveControlExecution(test.ctx, result);
-  assertEquals(saved.dataHandles.map((handle) => handle.name), [
+  const saved = await method(
+    "Save execution",
+    z.object({}),
     "controlExecution",
+    controlResources.controlExecution.schema,
+    () => saveControlExecution(test.ctx, result),
+  ).execute({}, test.ctx);
+  assertEquals(saved.dataHandles.map((handle) => handle.name), [
     "controlStdout",
     "controlStderr",
+    "controlExecution",
   ]);
   assertEquals(test.getWrittenFiles().map((file) => file.name), [
     "controlStdout",
@@ -324,7 +333,7 @@ Deno.test("control exec rejects protocol errors, unsupported frames, and truncat
     includes: "mismatched TTY",
   }, {
     frames: [binary(9, 1)],
-    includes: "invalid binary",
+    includes: "invalid stream",
   }, {
     frames: [binary(3, 0), binary(3, 0)],
     includes: "duplicate exit",

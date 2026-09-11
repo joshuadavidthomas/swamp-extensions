@@ -3,13 +3,13 @@
 import { SpriteArgsSchema } from "./_lib/sprite-api.ts";
 import { restFiles, restMethods, restResources } from "./_lib/sprite-rest.ts";
 import { execFiles, execMethods, execResources } from "./_lib/exec.ts";
-import { streamingMethods, streamingResources } from "./_lib/watch-proxy.ts";
+import { proxyMethods, proxyResources } from "./_lib/proxy.ts";
 import {
   gatewayFiles,
   gatewayMethods,
   gatewayResources,
 } from "./_lib/gateway.ts";
-import { portMethods, portResources } from "./_lib/ports.ts";
+import { observeMethods, observeResources } from "./_lib/observe.ts";
 import {
   controlFiles,
   controlMethods,
@@ -25,9 +25,9 @@ export const model = {
   resources: {
     ...restResources,
     ...execResources,
-    ...streamingResources,
+    ...proxyResources,
     ...gatewayResources,
-    ...portResources,
+    ...observeResources,
     ...controlResources,
     ...managementResources,
   },
@@ -35,9 +35,9 @@ export const model = {
   methods: {
     ...restMethods,
     ...execMethods,
-    ...streamingMethods,
+    ...proxyMethods,
     ...gatewayMethods,
-    ...portMethods,
+    ...observeMethods,
     ...controlMethods,
     ...managementMethods,
   },

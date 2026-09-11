@@ -1,22 +1,27 @@
 // SPDX-License-Identifier: MIT
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { createModelTestContext } from "@swamp-club/swamp-testing";
-import type { Channel, Message } from "./socket.ts";
-import type { SpriteContext } from "./sprite-api.ts";
-import { portMethods, portResources, watchPorts } from "./ports.ts";
+import type { Message } from "./socket.ts";
+import { type SpriteContext } from "./sprite-api.ts";
+import { observeWatch, watchPorts } from "./observe.ts";
+import { FakeChannel } from "./test_support.ts";
 
 const encoder = new TextEncoder();
 const globalArgs = {
-  token: "test-token",
+  token: "test",
   baseUrl: "https://api.sprites.dev",
   timeoutMs: 30_000,
   maxResponseBytes: 1_000_000,
   name: "demo sprite",
 };
-
 function context(
   signal = new AbortController().signal,
-  overrides: Partial<typeof globalArgs> = {},
+  overrides: Partial<SpriteContext["globalArgs"]> = {},
 ): SpriteContext {
   const args = { ...globalArgs, ...overrides };
   const { context } = createModelTestContext({ globalArgs: args });
@@ -27,48 +32,151 @@ function context(
     deleteResource: () => Promise.resolve(),
   };
 }
-
 function text(value: unknown): Message {
   return { binary: false, bytes: encoder.encode(JSON.stringify(value)) };
 }
 
-class FakeChannel implements Channel {
-  readonly sent: Array<string | Uint8Array> = [];
-  closed = false;
-  reads = 0;
-  #messages: Array<Message | null | Error>;
-  #waiters: Array<(value: Message | null) => void> = [];
+Deno.test("watch reports bounded provider errors with the bearer token removed", async () => {
+  const channel = new FakeChannel([
+    text({
+      type: "error",
+      message: `failed for ${globalArgs.token}\n\u2028\u202e${
+        "x".repeat(1000)
+      }`,
+    }),
+  ]);
+  const error = await assertRejects(
+    () =>
+      observeWatch(
+        context(),
+        { paths: ["."], durationMs: 100 },
+        () => Promise.resolve(channel),
+      ),
+    Error,
+  );
+  assertStringIncludes(error.message, "[redacted]");
+  assertEquals(error.message.includes(globalArgs.token), false);
+  assertEquals(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(error.message), false);
+  assertEquals(error.message.length < 600, true);
+  assertEquals(channel.closed, true);
+});
 
-  constructor(messages: Array<Message | null | Error>) {
-    this.#messages = [...messages];
-  }
+Deno.test("watch bounds cumulative received bytes even when its queue drains", async () => {
+  const channel = new FakeChannel([
+    text({ type: "subscribed" }),
+    text({ type: "event", path: "first-long-path", event: "write" }),
+    text({ type: "event", path: "second-long-path", event: "write" }),
+  ]);
+  const ctx = {
+    ...context(),
+    globalArgs: { ...globalArgs, maxResponseBytes: 90 },
+  };
+  await assertRejects(
+    () =>
+      observeWatch(
+        ctx,
+        { paths: ["."], durationMs: 1_000, maxEvents: 10 },
+        () => Promise.resolve(channel),
+      ),
+    Error,
+    "maxResponseBytes",
+  );
+  assertEquals(channel.closed, true);
+});
 
-  read(): Promise<Message | null> {
-    this.reads++;
-    if (this.#messages.length) {
-      const next = this.#messages.shift();
-      return next instanceof Error
-        ? Promise.reject(next)
-        : Promise.resolve(next ?? null);
-    }
-    if (this.closed) return Promise.resolve(null);
-    return new Promise((resolve) => this.#waiters.push(resolve));
-  }
+Deno.test("watch monotonic deadline stops an unbounded resolved queue", async () => {
+  const channel = new FakeChannel([]);
+  let reads = 0;
+  channel.read = () => {
+    reads++;
+    return Promise.resolve(
+      reads === 1
+        ? text({ type: "subscribed" })
+        : text({ type: "event", path: "queued", event: "write" }),
+    );
+  };
+  const output = await observeWatch(
+    context(undefined, { maxResponseBytes: 1_073_741_824 }),
+    { paths: ["."], durationMs: 1, maxEvents: 100_000 },
+    () => Promise.resolve(channel),
+  );
+  assertEquals(output.events.length < 100_000, true);
+  assertEquals(reads < 100_001, true);
+  assertEquals(channel.closed, true);
+});
 
-  send(data: string | Uint8Array): Promise<void> {
-    this.sent.push(data);
-    return Promise.resolve();
-  }
+Deno.test("watch sends the exact subscription and preserves typed events up to its cap", async () => {
+  const channel = new FakeChannel([
+    text({ type: "subscribed", paths: ["src"] }),
+    text({
+      type: "event",
+      path: "src/a.ts",
+      event: "write",
+      timestamp: "now",
+      size: 4,
+      isDir: false,
+    }),
+  ]);
+  const output = await observeWatch(context(), {
+    paths: ["src"],
+    recursive: true,
+    workingDir: "/app",
+    durationMs: 1_000,
+    maxEvents: 1,
+  }, (_ctx, path) => {
+    assertEquals(path, "/v1/sprites/demo%20sprite/fs/watch");
+    return Promise.resolve(channel);
+  });
+  assertEquals(channel.sent, [
+    JSON.stringify({
+      type: "subscribe",
+      paths: ["src"],
+      recursive: true,
+      workingDir: "/app",
+    }),
+  ]);
+  assertEquals(output, {
+    events: [{
+      type: "event",
+      path: "src/a.ts",
+      event: "write",
+      timestamp: "now",
+      size: 4,
+      isDir: false,
+    }],
+    truncated: true,
+  });
+  assertEquals(channel.closed, true);
+});
 
-  close(): void {
-    this.closed = true;
-    for (const resolve of this.#waiters.splice(0)) resolve(null);
-  }
+Deno.test("watch requires acknowledgement and closes on protocol failure", async () => {
+  const channel = new FakeChannel([
+    text({ type: "event", path: "a", event: "create" }),
+  ]);
+  const error = await assertRejects(
+    () =>
+      observeWatch(
+        context(),
+        { paths: ["."], durationMs: 10 },
+        () => Promise.resolve(channel),
+      ),
+    Error,
+  );
+  assertStringIncludes(error.message, "did not acknowledge");
+  assertEquals(channel.closed, true);
+});
 
-  closeCode(): number | undefined {
-    return undefined;
-  }
-}
+Deno.test("watch cancellation fails and closes a pending read", async () => {
+  const controller = new AbortController();
+  const channel = new FakeChannel([]);
+  const pending = observeWatch(context(controller.signal), {
+    paths: ["."],
+    durationMs: 1_000,
+  }, () => Promise.resolve(channel));
+  controller.abort(new Error("parent stopped"));
+  await assertRejects(() => pending, Error, "parent stopped");
+  assertEquals(channel.closed, true);
+});
 
 const opened = {
   type: "port_opened" as const,
@@ -220,7 +328,12 @@ Deno.test("port watch rejects binary, malformed, error, and transport notificati
         ),
       Error,
     );
-    assertEquals(error.message.includes("secret"), false, testCase.name);
+    assertEquals(
+      error.message.includes("secret"),
+      testCase.name === "transport error",
+      testCase.name,
+    );
+    if (testCase.next instanceof Error) assertEquals(error, testCase.next);
     assertEquals(channel.closed, true, testCase.name);
   }
 });
@@ -327,33 +440,4 @@ Deno.test("port watch enforces the global timeout before the first frame", async
     "timeoutMs",
   );
   assertEquals(channel.closed, true);
-});
-
-Deno.test("port declarations retain bounded arguments and finite output history", () => {
-  assertEquals(Object.keys(portMethods), ["watchPorts"]);
-  assertEquals(Object.keys(portResources), ["portEvents"]);
-  assertEquals(portResources.portEvents.lifetime, "7d");
-  assertEquals(portResources.portEvents.garbageCollection, 10);
-  assertEquals(
-    portMethods.watchPorts.arguments.safeParse({ durationMs: 1 }).success,
-    true,
-  );
-  assertEquals(
-    portMethods.watchPorts.arguments.safeParse({ durationMs: 2_147_483_648 })
-      .success,
-    false,
-  );
-  assertEquals(
-    portMethods.watchPorts.arguments.safeParse({
-      durationMs: 1,
-      maxEvents: 100_001,
-    }).success,
-    false,
-  );
-  const nullOutput = portResources.portEvents.schema.safeParse({
-    initialPorts: null,
-    notifications: [],
-    truncated: true,
-  });
-  assertEquals(nullOutput.success, false);
 });

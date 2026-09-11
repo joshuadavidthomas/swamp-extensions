@@ -8,11 +8,15 @@ import {
   method,
   ndjson,
   resource,
-  type Result,
   segment,
+  withHandles,
 } from "./core.ts";
-import { type CommandResult, executeHttp } from "./exec-http.ts";
-import { type ConnectChannel as Connect, openChannel } from "./socket.ts";
+import {
+  type CommandResult,
+  decodeStreamFrame,
+  executeHttp,
+} from "./exec-http.ts";
+import { type ConnectChannel, openChannel } from "./socket.ts";
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
 import { initializeTerminal, TerminalDimension } from "./terminal.ts";
 
@@ -118,8 +122,7 @@ const Session = z.object({
   tty: z.boolean(),
   last_activity: z.string().optional(),
 });
-const ApiSessions = z.object({ sessions: z.array(Session) });
-const Sessions = ApiSessions.extend({ truncated: z.literal(false) });
+const Sessions = z.object({ sessions: z.array(Session) });
 const KillEvent = z.object({
   type: z.enum(["signal", "timeout", "exited", "killed", "error", "complete"]),
   message: z.string().optional(),
@@ -140,7 +143,7 @@ export type SocketResult = Omit<CommandResult, "exitCode"> & {
 export async function executeSocket(
   ctx: SpriteContext,
   args: z.output<typeof ExecArgs> | z.output<typeof AttachArgs>,
-  connect: Connect = openChannel,
+  connect: ConnectChannel = openChannel,
 ): Promise<SocketResult> {
   const attaching = "session_id" in args;
   const command = attaching ? {} : args.tty
@@ -190,11 +193,9 @@ export async function executeSocket(
   const receiveBinary = (bytes: Uint8Array): void => {
     if (tty) stdout.push(bytes);
     else {
-      const [stream] = bytes;
-      if (stream === 1) stdout.push(bytes.slice(1));
-      else if (stream === 2) stderr.push(bytes.slice(1));
-      else if (stream === 3 && bytes.length === 2) exitCode = bytes[1];
-      else throw new Error("Exec returned an invalid binary stream frame.");
+      const frame = decodeStreamFrame(bytes);
+      if (frame.kind === "exit") exitCode = frame.code;
+      else (frame.kind === "stdout" ? stdout : stderr).push(frame.data);
     }
   };
   const sendInput = async (data: Uint8Array): Promise<void> => {
@@ -335,29 +336,28 @@ export async function saveExecution(
   ctx: SpriteContext,
   result: SocketResult,
   failOnNonZero: boolean,
-): Promise<Result> {
+) {
   if (failOnNonZero && result.exitCode !== null && result.exitCode !== 0) {
     throw new Error(
       `Sprite command exited with code ${result.exitCode}. Set failOnNonZero=false to save its stdout and stderr for inspection.`,
     );
   }
   ctx.signal.throwIfAborted();
-  const data = Execution.parse({
+  const data = {
     status: result.status,
     exitCode: result.exitCode,
     sessionId: result.sessionId,
     stdoutBytes: result.stdout.length,
     stderrBytes: result.stderr.length,
     controls: result.controls,
-  });
+  };
   const stdout = await ctx.createFileWriter("stdout", "stdout").writeAll(
     result.stdout,
   );
   const stderr = await ctx.createFileWriter("stderr", "stderr").writeAll(
     result.stderr,
   );
-  const metadata = await ctx.writeResource("execution", "execution", data);
-  return { dataHandles: [metadata, stdout, stderr] };
+  return withHandles(data, [stdout, stderr]);
 }
 /** Exec output declarations. */
 export const execResources = {
@@ -373,56 +373,42 @@ export const execResources = {
 export const execFiles = { stdout: BinaryFile, stderr: BinaryFile };
 /** All HTTP and WebSocket execution methods. */
 export const execMethods = {
-  exec: {
-    description:
-      "Execute a command over WebSocket with binary output and optional TTY controls",
-    arguments: ExecArgs,
-    execute: async (
-      input: z.output<typeof ExecArgs>,
-      ctx: SpriteContext,
-    ): Promise<Result> => {
-      const args = ExecArgs.parse(input);
-      ctx.logger.info("Starting Sprite command");
+  exec: method(
+    "Execute a command over WebSocket with binary output and optional TTY controls",
+    ExecArgs,
+    "execution",
+    Execution,
+    async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
       const result = await saveExecution(
         ctx,
         await executeSocket(ctx, args),
         args.failOnNonZero,
       );
-      ctx.logger.info("Finished Sprite command");
       return result;
     },
-  },
-  attach: {
-    description:
-      "Attach to an existing exec session and exchange input, output, and controls",
-    arguments: AttachArgs,
-    execute: async (
-      input: z.output<typeof AttachArgs>,
-      ctx: SpriteContext,
-    ): Promise<Result> => {
-      const args = AttachArgs.parse(input);
-      ctx.logger.info("Attaching to Sprite session");
+  ),
+  attach: method(
+    "Attach to an existing exec session and exchange input, output, and controls",
+    AttachArgs,
+    "execution",
+    Execution,
+    async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
       const result = await saveExecution(
         ctx,
         await executeSocket(ctx, args),
         args.failOnNonZero,
       );
-      ctx.logger.info("Finished Sprite session attachment");
       return result;
     },
-  },
-  execHttp: {
-    description:
-      "Execute over HTTP/1.1 while preserving provider chunk framing",
-    arguments: CommandArgs,
-    execute: async (
-      input: z.output<typeof CommandArgs>,
-      ctx: SpriteContext,
-    ): Promise<Result> => {
-      const args = CommandArgs.parse(input);
-      ctx.logger.info("Starting HTTP Sprite command");
+  ),
+  execHttp: method(
+    "Execute over HTTP/1.1 while preserving provider chunk framing",
+    CommandArgs,
+    "execution",
+    Execution,
+    async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
       const result = await executeHttp(ctx, {
         cmd: args.cmd,
@@ -439,24 +425,21 @@ export const execMethods = {
         sessionId: null,
         controls: [],
       }, args.failOnNonZero);
-      ctx.logger.info("Finished HTTP Sprite command");
       return output;
     },
-  },
+  ),
   listSessions: method(
     "List exec sessions",
     z.object({}),
     "sessions",
     Sessions,
-    async (_args, ctx: SpriteContext) => ({
-      ...await jsonRequest(
+    async (_args, ctx: SpriteContext) =>
+      await jsonRequest(
         ctx,
         "GET",
         spritePath(ctx, "/exec"),
-        ApiSessions,
+        Sessions,
       ),
-      truncated: false as const,
-    }),
   ),
   killSession: method(
     "Kill an exec session",

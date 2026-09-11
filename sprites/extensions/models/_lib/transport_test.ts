@@ -10,7 +10,7 @@ import { executeHttp } from "./exec-http.ts";
 import { requestGateway } from "./gateway.ts";
 import { openChannel, type SocketFactory } from "./socket.ts";
 import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
-import { connectProxy, runProxy } from "./watch-proxy.ts";
+import { connectExecProxy, runProxy } from "./proxy.ts";
 
 const encoder = new TextEncoder();
 
@@ -137,6 +137,7 @@ function context(
     }),
     signal,
     logger: { info: () => {} },
+    readResource: () => Promise.resolve({ id: "fixture-sprite" }),
   } as unknown as SpriteContext;
 }
 
@@ -297,6 +298,31 @@ Deno.test("openChannel drops a large backpressured queue as soon as its byte lim
   }
 });
 
+function mockSpriteVerification(): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: "fixture-sprite",
+          name: "worker",
+          organization: "org",
+          url: "https://worker.example",
+          status: "running",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          url_settings: null,
+          version: null,
+          environment_version: null,
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    )) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
 Deno.test("runProxy delivers close-delimited responses before bounded cleanup", async () => {
   const fixture = await certificateFixture();
   const outer = https.createServer({ cert: fixture.cert, key: fixture.key });
@@ -309,50 +335,33 @@ Deno.test("runProxy delivers close-delimited responses before bounded cleanup", 
   ]);
   let pendingHandshakeClosed = false;
   let pendingHandshakeStarted = false;
-  webSockets.on("connection", (socket) => {
-    let control = false;
-    let connected = false;
+  webSockets.on("connection", (socket, request) => {
+    const command = new URL(request.url!, "https://fixture").searchParams
+      .getAll("cmd");
+    const pending = command.includes("pending.internal");
     let responded = false;
+    if (pending) pendingHandshakeStarted = true;
+    else {socket.send(
+        Buffer.concat([Buffer.from([2]), Buffer.from("connected\n")]),
+      );}
     socket.on("close", () => {
-      if (!connected) pendingHandshakeClosed = true;
+      if (pending) pendingHandshakeClosed = true;
     });
     socket.on("message", (data, binary) => {
-      if (!connected && !binary) {
-        const start = data.toString();
-        if (start.includes("pending.internal")) {
-          pendingHandshakeStarted = true;
-          return;
-        }
-        control = start.startsWith("control:");
-        connected = true;
-        socket.send(JSON.stringify({ status: "connected" }));
-        return;
-      }
-      if (!binary || responded) return;
+      if (pending || !binary || responded || (data as Buffer)[0] !== 0) return;
       responded = true;
-      socket.send(Buffer.alloc(0), { binary: true });
+      socket.send(Buffer.from([1]), { binary: true });
       for (let offset = 0; offset < response.length; offset += 8_192) {
         const chunk = response.subarray(
           offset,
           Math.min(offset + 8_192, response.length),
         );
-        const final = offset + chunk.length === response.length;
-        socket.send(
-          chunk,
-          { binary: true },
-          final
-            ? () => {
-              if (control) {
-                socket.send(
-                  'control:{"type":"op.complete","op":"proxy"}',
-                );
-              } else socket.close(1000, "");
-            }
-            : undefined,
-        );
+        socket.send(Buffer.concat([Buffer.from([1]), chunk]), { binary: true });
       }
+      socket.send(Buffer.from([3, 0]), { binary: true });
     });
   });
+  const restoreVerification = mockSpriteVerification();
   try {
     const outerPort = await listen(outer);
     const ctx = context(outerPort);
@@ -364,14 +373,13 @@ Deno.test("runProxy delivers close-delimited responses before bounded cleanup", 
       query = {},
     ) => openChannel(channelContext, path, query, socketFactory);
 
-    for (const transport of ["proxy", "control"] as const) {
+    {
       const localPort = await reserveTcpPort();
       let proxySettled = false;
       const proxy = runProxy(ctx, {
         localPort,
         host: "service.internal",
         port: 8080,
-        transport,
         durationMs: 1_000,
       }, { connect: connectWithCa }).finally(() => {
         proxySettled = true;
@@ -404,7 +412,6 @@ Deno.test("runProxy delivers close-delimited responses before bounded cleanup", 
       localPort,
       host: "pending.internal",
       port: 8080,
-      transport: "proxy",
       durationMs: 500,
     }, { connect: connectWithCa }).finally(() => {
       pendingProxySettled = true;
@@ -425,6 +432,7 @@ Deno.test("runProxy delivers close-delimited responses before bounded cleanup", 
     assertEquals(output.acceptedConnections, 1);
     assertEquals(output.completedConnections, 1);
   } finally {
+    restoreVerification();
     for (const socket of webSockets.clients) socket.terminate();
     webSockets.close();
     await closeServer(outer);
@@ -535,7 +543,7 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
   const outer = https.createServer({ cert: fixture.cert, key: fixture.key });
   const webSockets = new WebSocketServer({
     server: outer,
-    path: "/v1/sprites/worker/proxy",
+    path: "/v1/sprites/worker/exec",
   });
   const outerAuth: Array<string | undefined> = [];
   const targets: unknown[] = [];
@@ -543,26 +551,39 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
   let gatewayPort = 0;
   webSockets.on("connection", (socket, request) => {
     outerAuth.push(request.headers.authorization);
-    let upstream: net.Socket | undefined;
-    socket.on("message", (data, binary) => {
-      if (!binary) {
-        targets.push(JSON.parse(data.toString()));
-        upstream = net.connect(
-          gatewayPort,
-          "127.0.0.1",
-          () => socket.send(JSON.stringify({ status: "connected" })),
-        );
-        tcpSockets.add(upstream);
-        upstream.on("data", (chunk) => socket.send(chunk, { binary: true }));
-        upstream.on("close", () => {
-          tcpSockets.delete(upstream!);
-          if (socket.readyState === WebSocket.OPEN) socket.close(1000, "");
-        });
-        upstream.on("error", () => socket.terminate());
-      } else upstream?.write(data as Buffer);
+    const command = new URL(request.url!, "https://fixture").searchParams
+      .getAll("cmd");
+    targets.push({ host: command[5], port: Number(command[6]) });
+    const upstream = net.connect(
+      gatewayPort,
+      "127.0.0.1",
+      () =>
+        socket.send(
+          Buffer.concat([Buffer.from([2]), Buffer.from("connected\n")]),
+        ),
+    );
+    tcpSockets.add(upstream);
+    upstream.on(
+      "data",
+      (chunk: Buffer) =>
+        socket.send(Buffer.concat([Buffer.from([1]), chunk]), { binary: true }),
+    );
+    upstream.on("end", () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(Buffer.from([3, 0]));
+      }
     });
-    socket.on("close", () => upstream?.destroy());
+    upstream.on("close", () => tcpSockets.delete(upstream));
+    upstream.on("error", () => socket.terminate());
+    socket.on("message", (data, binary) => {
+      if (!binary) return;
+      const frame = data as Buffer;
+      if (frame[0] === 0) upstream.write(frame.subarray(1));
+      else if (frame[0] === 4) upstream.end();
+    });
+    socket.on("close", () => upstream.destroy());
   });
+  const restoreVerification = mockSpriteVerification();
   try {
     gatewayPort = await listen(gateway);
     const outerPort = await listen(outer);
@@ -581,7 +602,7 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
       body: new Uint8Array([0, 255, 4]),
     }, {
       connect: (connectContext, host, port) =>
-        connectProxy(connectContext, host, port, caConnect),
+        connectExecProxy(connectContext, host, port, caConnect),
       connectTls: ((options: tls.ConnectionOptions) =>
         tls.connect({ ...options, ca: fixture.cert })) as typeof tls.connect,
     });
@@ -595,6 +616,7 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
     assertEquals(result.headers["set-cookie"], ["one=1", "two=2"]);
     assertEquals(result.body, new Uint8Array([0, 254, 3]));
   } finally {
+    restoreVerification();
     for (const socket of webSockets.clients) socket.terminate();
     for (const socket of tcpSockets) socket.destroy();
     webSockets.close();
