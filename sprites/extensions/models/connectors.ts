@@ -43,20 +43,18 @@ const ConnectorProviderSchema = z.enum([
   "sprites_admin",
 ]);
 
-const ConnectionTypeSchema = z.enum([
-  "oauth",
-  "api_key",
-  "provisioned",
-  "internal",
-]);
-
 const ConnectionSchema = z.object({
   id: z.string(),
   provider: ConnectorProviderSchema,
   provider_account_id: z.string(),
   provider_account_name: z.string().optional(),
   scopes: z.string().nullish(),
-  connection_type: ConnectionTypeSchema.optional(),
+  connection_type: z.enum([
+    "oauth",
+    "api_key",
+    "provisioned",
+    "internal",
+  ]).optional(),
   access_policy: AccessPolicySchema.optional(),
   provider_info: z.record(z.string(), z.json()).optional(),
   user_id: z.string().nullish(),
@@ -83,60 +81,9 @@ const DeletionSchema = z.object({
   id: z.string(),
 });
 
-const ProviderArgSchema = z.string().min(1);
-
-const IdArgSchema = z.string().min(1);
-
-const ListArgsSchema = z.object({
-  provider: z.string().optional(),
-});
-
-const CreateApiKeyArgsSchema = z.object({
-  provider: ProviderArgSchema,
-  api_key: z.string().min(1).meta({ sensitive: true }).describe(
-    "Use a vault reference for the provider credential.",
-  ),
-  access_policy: AccessPolicySchema.optional(),
-});
-
-const ProvisionArgsSchema = z.object({
-  provider: ProviderArgSchema,
-});
-
 const IdArgsSchema = z.object({
-  id: IdArgSchema,
+  id: z.string().min(1),
 });
-
-const PolicyArgsSchema = z.object({
-  id: IdArgSchema,
-  access_policy: AccessPolicySchema,
-});
-
-const AuthorizeArgsSchema = z.object({
-  provider: ProviderArgSchema,
-  scopes: z.string().optional().describe(
-    "Comma-separated scopes API field that replaces the provider defaults.",
-  ),
-  add_scopes: z.string().optional().describe(
-    "Comma-separated add_scopes API field added to an existing grant.",
-  ),
-  redirect_uri: z.string().optional(),
-  state: z.string().optional().meta({ sensitive: true }).describe(
-    "Optional OAuth state API field. Sprites generates one when omitted.",
-  ),
-});
-
-const CallbackArgsSchema = z.object({
-  provider: ProviderArgSchema,
-  code: z.string().min(1).meta({ sensitive: true }),
-  redirect_uri: z.string().optional(),
-  state: z.string().optional().meta({ sensitive: true }),
-  access_policy: AccessPolicySchema.optional(),
-});
-
-function isNotFound(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 404;
-}
 
 /** Complete organization-scoped Sprites connector collection model. */
 export const model = {
@@ -165,66 +112,75 @@ export const model = {
   methods: {
     list: method(
       "List organization connectors",
-      ListArgsSchema,
+      z.object({
+        provider: z.string().optional(),
+      }),
       "connections",
       ConnectionsResponseSchema,
-      async (args, ctx) => {
-        return await jsonRequest(
+      (args, ctx) =>
+        jsonRequest(
           ctx,
           "GET",
           "/v1/oauth/connections",
           ConnectionsResponseSchema,
           { query: { provider: args.provider } },
-        );
-      },
+        ),
     ),
     createApiKey: method(
       "Create an API-key connector without automatic retries",
-      CreateApiKeyArgsSchema,
+      z.object({
+        provider: z.string().min(1),
+        api_key: z.string().min(1).meta({ sensitive: true }).describe(
+          "Use a vault reference for the provider credential.",
+        ),
+        access_policy: AccessPolicySchema.optional(),
+      }),
       "connection",
       ConnectionResponseSchema,
-      async (args, ctx) => {
-        return await jsonRequest(
+      (args, ctx) =>
+        jsonRequest(
           ctx,
           "POST",
           "/v1/oauth/connections/api_key",
           ConnectionResponseSchema,
           { json: args },
-        );
-      },
+        ),
     ),
     provision: method(
       "Provision a managed connector without automatic retries",
-      ProvisionArgsSchema,
+      z.object({
+        provider: z.string().min(1),
+      }),
       "connection",
       ConnectionResponseSchema,
-      async (args, ctx) => {
-        return await jsonRequest(
+      (args, ctx) =>
+        jsonRequest(
           ctx,
           "POST",
           "/v1/oauth/connections/provision",
           ConnectionResponseSchema,
           { json: args },
-        );
-      },
+        ),
     ),
     get: method(
       "Get an organization connector",
       IdArgsSchema,
       "connection",
       ConnectionResponseSchema,
-      async (args, ctx) => {
-        return await jsonRequest(
+      (args, ctx) =>
+        jsonRequest(
           ctx,
           "GET",
           `/v1/oauth/connections/${segment(args.id)}`,
           ConnectionResponseSchema,
-        );
-      },
+        ),
     ),
     updatePolicy: method(
       "Replace a connector access policy",
-      PolicyArgsSchema,
+      z.object({
+        id: z.string().min(1),
+        access_policy: AccessPolicySchema,
+      }),
       "connection",
       ConnectionResponseSchema,
       (args, ctx) =>
@@ -242,23 +198,38 @@ export const model = {
       "deletion",
       DeletionSchema,
       async (args, ctx) => {
-        const path = `/v1/oauth/connections/${segment(args.id)}`;
         try {
-          await emptyRequest(ctx, "DELETE", path);
+          await emptyRequest(
+            ctx,
+            "DELETE",
+            `/v1/oauth/connections/${segment(args.id)}`,
+          );
         } catch (error) {
-          if (!isNotFound(error)) throw error;
+          if (!(error instanceof ApiError && error.status === 404)) throw error;
         }
         return { id: args.id };
       },
     ),
     authorize: method(
       "Start provider OAuth authorization",
-      AuthorizeArgsSchema,
+      z.object({
+        provider: z.string().min(1),
+        scopes: z.string().optional().describe(
+          "Comma-separated scopes API field that replaces the provider defaults.",
+        ),
+        add_scopes: z.string().optional().describe(
+          "Comma-separated add_scopes API field added to an existing grant.",
+        ),
+        redirect_uri: z.string().optional(),
+        state: z.string().optional().meta({ sensitive: true }).describe(
+          "Optional OAuth state API field. Sprites generates one when omitted.",
+        ),
+      }),
       "authorization",
       AuthorizationSchema,
-      async (args, ctx) => {
+      (args, ctx) => {
         const { provider, ...query } = args;
-        return await jsonRequest(
+        return jsonRequest(
           ctx,
           "GET",
           `/v1/oauth/${segment(provider)}/authorize`,
@@ -269,12 +240,18 @@ export const model = {
     ),
     callback: method(
       "Complete provider OAuth authorization without automatic retries",
-      CallbackArgsSchema,
+      z.object({
+        provider: z.string().min(1),
+        code: z.string().min(1).meta({ sensitive: true }),
+        redirect_uri: z.string().optional(),
+        state: z.string().optional().meta({ sensitive: true }),
+        access_policy: AccessPolicySchema.optional(),
+      }),
       "connection",
       ConnectionResponseSchema,
-      async (args, ctx) => {
+      (args, ctx) => {
         const { provider, ...json } = args;
-        return await jsonRequest(
+        return jsonRequest(
           ctx,
           "POST",
           `/v1/oauth/${segment(provider)}/callback`,

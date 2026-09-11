@@ -42,23 +42,6 @@ const SpriteConfig = z.object({
   region: z.string().min(1).optional(),
   storage_gb: z.number().positive().optional(),
 });
-const CreateArgs = z.object({
-  config: SpriteConfig.optional(),
-  environment: Environment.optional(),
-  url_settings: RequestUrlSettings.optional(),
-  labels: z.array(z.string()).optional(),
-  wait_for_capacity: z.boolean().optional(),
-  runtime: z.enum(["default", "dev"]).optional(),
-});
-const UpdateArgs = z.object({
-  url_settings: RequestUrlSettings.optional(),
-  labels: z.array(z.string()).optional(),
-}).refine(
-  (value) => value.url_settings !== undefined || value.labels !== undefined,
-  {
-    message: "Provide url_settings or labels.",
-  },
-);
 
 const Checkpoint = z.object({
   id: z.string(),
@@ -132,14 +115,6 @@ export const Service = z.object({
   needs: z.array(z.string()).nullable(),
   http_port: z.number().int().nullable().optional(),
   state: ServiceState.nullish(),
-});
-const ServiceRequest = z.object({
-  cmd: z.string().min(1),
-  args: z.array(z.string()).default([]),
-  env: Environment.optional(),
-  dir: z.string().optional(),
-  needs: z.array(z.string()).default([]),
-  http_port: z.number().int().nullable().optional(),
 });
 const Timestamp = z.number().int();
 const ServiceEvent = z.discriminatedUnion("type", [
@@ -336,18 +311,24 @@ export const restResources = {
   fileOwnerChanged: resource(FsChown, "Native filesystem chown result"),
 };
 
-/** Binary outputs emitted by REST methods. */
 export const restFiles = { contents: BinaryFile };
 
 /** Complete non-WebSocket REST method set for one Sprite. */
 export const restMethods = {
   create: method(
     "Create the configured Sprite",
-    CreateArgs,
+    z.object({
+      config: SpriteConfig.optional(),
+      environment: Environment.optional(),
+      url_settings: RequestUrlSettings.optional(),
+      labels: z.array(z.string()).optional(),
+      wait_for_capacity: z.boolean().optional(),
+      runtime: z.enum(["default", "dev"]).optional(),
+    }),
     "state",
     SpriteResponse,
-    async (args, ctx: SpriteContext) =>
-      await jsonRequest(ctx, "POST", "/v1/sprites", SpriteResponse, {
+    (args, ctx: SpriteContext) =>
+      jsonRequest(ctx, "POST", "/v1/sprites", SpriteResponse, {
         json: { name: ctx.globalArgs.name, ...args },
       }),
   ),
@@ -356,12 +337,20 @@ export const restMethods = {
     Empty,
     "state",
     SpriteResponse,
-    async (_args, ctx: SpriteContext) =>
-      await jsonRequest(ctx, "GET", spritePath(ctx), SpriteResponse),
+    (_args, ctx: SpriteContext) =>
+      jsonRequest(ctx, "GET", spritePath(ctx), SpriteResponse),
   ),
   update: method(
     "Update the configured Sprite",
-    UpdateArgs,
+    z.object({
+      url_settings: RequestUrlSettings.optional(),
+      labels: z.array(z.string()).optional(),
+    }).refine(
+      (value) => value.url_settings !== undefined || value.labels !== undefined,
+      {
+        message: "Provide url_settings or labels.",
+      },
+    ),
     "state",
     SpriteResponse,
     async (args, ctx: SpriteContext) => {
@@ -429,10 +418,9 @@ export const restMethods = {
           response,
           ctx.globalArgs.maxResponseBytes,
         );
-        const digest = createHash("sha256").update(bytes).digest("hex");
         return {
           bodyBytes: bytes.length,
-          sha256: digest,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
         };
       } finally {
         operation.dispose();
@@ -493,8 +481,8 @@ export const restMethods = {
     z.object({ checkpoint_id: CheckpointId }),
     "checkpoint",
     Checkpoint,
-    async (args, ctx: SpriteContext) =>
-      await jsonRequest(
+    (args, ctx: SpriteContext) =>
+      jsonRequest(
         ctx,
         "GET",
         checkpointPath(ctx, args.checkpoint_id),
@@ -520,8 +508,8 @@ export const restMethods = {
     Empty,
     "networkPolicy",
     NetworkPolicy,
-    async (_args, ctx: SpriteContext) =>
-      await jsonRequest(
+    (_args, ctx: SpriteContext) =>
+      jsonRequest(
         ctx,
         "GET",
         spritePath(ctx, "/policy/network"),
@@ -544,8 +532,8 @@ export const restMethods = {
     Empty,
     "privilegesPolicy",
     PrivilegesPolicy,
-    async (_args, ctx: SpriteContext) =>
-      await jsonRequest(
+    (_args, ctx: SpriteContext) =>
+      jsonRequest(
         ctx,
         "GET",
         spritePath(ctx, "/policy/privileges"),
@@ -577,8 +565,8 @@ export const restMethods = {
     Empty,
     "resourcesPolicy",
     ResourcesPolicy,
-    async (_args, ctx: SpriteContext) =>
-      await jsonRequest(
+    (_args, ctx: SpriteContext) =>
+      jsonRequest(
         ctx,
         "GET",
         spritePath(ctx, "/policy/resources"),
@@ -624,7 +612,14 @@ export const restMethods = {
     "Create or update a Sprite service",
     z.object({
       service_name: z.string().min(1),
-      service: ServiceRequest,
+      service: z.object({
+        cmd: z.string().min(1),
+        args: z.array(z.string()).default([]),
+        env: Environment.optional(),
+        dir: z.string().optional(),
+        needs: z.array(z.string()).default([]),
+        http_port: z.number().int().nullable().optional(),
+      }),
       duration: z.string().min(1).optional(),
     }),
     "servicePut",
@@ -649,8 +644,8 @@ export const restMethods = {
     }),
     "serviceLogs",
     ServiceEvents,
-    async (args, ctx: SpriteContext) =>
-      await serviceStream(
+    (args, ctx: SpriteContext) =>
+      serviceStream(
         ctx,
         "GET",
         servicePath(ctx, args.service_name, "/logs"),
@@ -733,8 +728,8 @@ export const restMethods = {
     }),
     "files",
     FsList,
-    async (args, ctx: SpriteContext) =>
-      await jsonRequest(ctx, "GET", fsPath(ctx, "list"), FsList, {
+    (args, ctx: SpriteContext) =>
+      jsonRequest(ctx, "GET", fsPath(ctx, "list"), FsList, {
         query: args,
       }),
   ),
@@ -768,7 +763,6 @@ export const restMethods = {
     FsWrite,
     async (args, ctx: SpriteContext) => {
       await verifySprite(ctx);
-      const bytes = inputBytes(args.content);
       return await jsonRequest(ctx, "PUT", fsPath(ctx, "write"), FsWrite, {
         query: {
           path: args.path,
@@ -776,7 +770,7 @@ export const restMethods = {
           mode: args.mode,
           mkdir: args.mkdir,
         },
-        bytes,
+        bytes: inputBytes(args.content),
         headers: { "content-type": "application/octet-stream" },
       });
     },

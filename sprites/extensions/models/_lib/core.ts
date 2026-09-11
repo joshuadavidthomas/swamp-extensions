@@ -329,12 +329,13 @@ export function method<
       ctx.signal.throwIfAborted();
       if (definition.length === 3) {
         const [spec, output] = definition;
-        const resourceHandle = await ctx.writeResource(
-          spec,
-          spec,
-          output.parse(data),
+        dataHandles.push(
+          await ctx.writeResource(
+            spec,
+            spec,
+            output.parse(data),
+          ),
         );
-        dataHandles.push(resourceHandle);
       }
       ctx.logger.info("Finished {operation}", { operation: description });
       return { dataHandles };

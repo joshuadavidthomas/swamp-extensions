@@ -35,21 +35,21 @@ const GatewayConnection = z.looseObject({
 }).describe(
   "Source-defined configured gateway entry. Known fields are typed and unpublished provider metadata is retained.",
 );
-const AvailableProvider = z.looseObject({
-  setup_url: z.string().optional(),
-}).describe(
-  "Source-defined available-provider entry. setup_url is known and unpublished provider metadata is retained.",
-);
 const GatewayList = z.object({
   connections: z.array(GatewayConnection),
-  available: z.array(AvailableProvider),
+  available: z.array(
+    z.looseObject({
+      setup_url: z.string().optional(),
+    }).describe(
+      "Source-defined available-provider entry. setup_url is known and unpublished provider metadata is retained.",
+    ),
+  ),
 });
 
 const ProviderMethod = z.string().regex(HTTP_TOKEN).refine(
   (value) => value.toUpperCase() !== "CONNECT",
   "CONNECT establishes a tunnel; use proxy instead of the HTTP relay.",
 );
-const HeaderMap = z.record(z.string(), z.string()).meta({ sensitive: true });
 function validProviderPath(value: string): boolean {
   if (
     !value.startsWith("/") || value.startsWith("//") || /[\\\r\n#]/.test(value)
@@ -74,7 +74,9 @@ const GatewayRequestArgs = z.object({
     "providerPath must be an absolute provider path without a host, traversal, fragment, or header sequence.",
   ),
   method: ProviderMethod,
-  headers: HeaderMap.default({}),
+  headers: z.record(z.string(), z.string()).meta({ sensitive: true }).default(
+    {},
+  ),
   input: Input.optional().meta({ sensitive: true }),
 });
 const GatewayResponse = z.object({
@@ -142,10 +144,9 @@ async function secureTunnel(
     GATEWAY_HOST,
     GATEWAY_PORT,
   );
-  const connectTls = dependencies.connectTls ?? tls.connect;
   let socket: tls.TLSSocket;
   try {
-    socket = connectTls({
+    socket = (dependencies.connectTls ?? tls.connect)({
       socket: raw,
       servername: GATEWAY_HOST,
       rejectUnauthorized: true,
@@ -213,7 +214,6 @@ export async function requestGateway(
       dependencies,
     );
     const agent = new TunnelAgent(socket);
-    const requestHttps = dependencies.request ?? https.request;
     let outgoing: ReturnType<typeof https.request> | undefined;
     const onAbort = (): void => {
       outgoing?.destroy(signal.reason);
@@ -221,7 +221,7 @@ export async function requestGateway(
     signal.addEventListener("abort", onAbort, { once: true });
     try {
       const incoming = await new Promise<IncomingMessage>((resolve, reject) => {
-        outgoing = requestHttps({
+        outgoing = (dependencies.request ?? https.request)({
           protocol: "https:",
           hostname: GATEWAY_HOST,
           port: String(GATEWAY_PORT),

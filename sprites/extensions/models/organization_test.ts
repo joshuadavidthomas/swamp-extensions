@@ -34,7 +34,6 @@ function emptyPage(overrides: Partial<typeof emptyPageBase> = {}): Response {
 
 Deno.test("lookup reads every page and preserves admins access", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const { result, calls } = await withMockedFetch(
     (request) => {
@@ -99,7 +98,7 @@ Deno.test("lookup reads every page and preserves admins access", async () => {
   assertEquals(calls[0].headers.authorization, "Bearer test-token");
   assertEquals(result.dataHandles[0].name, "inventory");
 
-  const writes = getWrittenResources();
+  const writes = context.getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "inventory");
 
@@ -178,7 +177,6 @@ Deno.test("lookup rejects a null cursor when the API reports more pages", async 
 
 Deno.test("lookup fails before writing when the API rejects the token", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const error = await assertRejects(
     () =>
@@ -194,12 +192,11 @@ Deno.test("lookup fails before writing when the API rejects the token", async ()
   );
 
   assertStringIncludes(error.message, "HTTP 401");
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });
 
 Deno.test("lookup rejects an incomplete API page", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   let requests = 0;
   const error = await assertRejects(
@@ -220,12 +217,11 @@ Deno.test("lookup rejects an incomplete API page", async () => {
 
   assertStringIncludes(error.message, "invalid JSON response for its schema");
   assertEquals(requests, 1);
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });
 
 Deno.test("lookup rejects a repeated continuation token", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const error = await assertRejects(
     () =>
@@ -250,7 +246,7 @@ Deno.test("lookup rejects a repeated continuation token", async () => {
   );
 
   assertStringIncludes(error.message, "repeated a continuation token");
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });
 
 Deno.test("lookup retries transient responses, network failures, and response-body read failures", async () => {
@@ -283,7 +279,6 @@ Deno.test("lookup retries transient responses, network failures, and response-bo
 
 Deno.test("lookup stops after transient retries are exhausted", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
   let requests = 0;
 
   const error = await assertRejects(
@@ -307,13 +302,11 @@ Deno.test("lookup stops after transient retries are exhausted", async () => {
 
   assertStringIncludes(error.message, "HTTP 503");
   assertEquals(requests, 3);
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });
 
 Deno.test("lookup rejects a retry delay longer than its request budget", async () => {
-  const shortBudget = { ...globalArgs, timeoutMs: 1_000 };
-  const context = testContext(shortBudget);
-  const { getWrittenResources } = context;
+  const context = testContext({ ...globalArgs, timeoutMs: 1_000 });
   let requests = 0;
 
   const error = await assertRejects(
@@ -337,14 +330,13 @@ Deno.test("lookup rejects a retry delay longer than its request budget", async (
 
   assertStringIncludes(error.message, "longer than timeoutMs");
   assertEquals(requests, 1);
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });
 
 Deno.test("lookup honors parent cancellation without retrying", async () => {
   const controller = new AbortController();
   controller.abort(new DOMException("cancelled", "AbortError"));
   const context = testContext(globalArgs, { signal: controller.signal });
-  const { getWrittenResources } = context;
   let requests = 0;
 
   const error = await assertRejects(
@@ -368,7 +360,7 @@ Deno.test("lookup honors parent cancellation without retrying", async () => {
 
   assertEquals(error.name, "AbortError");
   assertEquals(requests, 1);
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });
 
 Deno.test("inventory enforces one aggregate byte budget across all pages without retrying oversize data", async () => {

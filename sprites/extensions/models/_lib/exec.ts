@@ -195,9 +195,8 @@ export async function executeSocket(
       else (frame.kind === "stdout" ? stdout : stderr).push(frame.data);
     }
   };
-  const sendInput = async (data: Uint8Array): Promise<void> => {
-    await channel.send(stdinFrame(tty, data));
-  };
+  const sendInput = (data: Uint8Array): Promise<void> =>
+    channel.send(stdinFrame(tty, data));
   const startActions = async (): Promise<void> => {
     if (
       attaching && tty && args.rows !== undefined && args.cols !== undefined
@@ -350,7 +349,6 @@ export async function saveExecution(
   );
   return withHandles(data, [stdout, stderr]);
 }
-/** Exec output declarations. */
 export const execResources = {
   execution: resource(
     Execution,
@@ -362,6 +360,17 @@ export const execResources = {
 };
 /** Separate binary stdout/stderr files avoid encoding loss. */
 export const execFiles = { stdout: BinaryFile, stderr: BinaryFile };
+async function runSocket(
+  ctx: SpriteContext,
+  args: Parameters<typeof executeSocket>[1],
+) {
+  await verifySprite(ctx);
+  return await saveExecution(
+    ctx,
+    await executeSocket(ctx, args),
+    args.failOnNonZero,
+  );
+}
 /** All HTTP and WebSocket execution methods. */
 export const execMethods = {
   exec: method(
@@ -369,28 +378,14 @@ export const execMethods = {
     ExecArgs,
     "execution",
     Execution,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await saveExecution(
-        ctx,
-        await executeSocket(ctx, args),
-        args.failOnNonZero,
-      );
-    },
+    (args, ctx: SpriteContext) => runSocket(ctx, args),
   ),
   attach: method(
     "Attach to an existing exec session and exchange input, output, and controls",
     AttachArgs,
     "execution",
     Execution,
-    async (args, ctx: SpriteContext) => {
-      await verifySprite(ctx);
-      return await saveExecution(
-        ctx,
-        await executeSocket(ctx, args),
-        args.failOnNonZero,
-      );
-    },
+    (args, ctx: SpriteContext) => runSocket(ctx, args),
   ),
   execHttp: method(
     "Execute over HTTP/1.1 while preserving provider chunk framing",
@@ -419,8 +414,8 @@ export const execMethods = {
     z.object({}),
     "sessions",
     Sessions,
-    async (_args, ctx: SpriteContext) =>
-      await jsonRequest(
+    (_args, ctx: SpriteContext) =>
+      jsonRequest(
         ctx,
         "GET",
         spritePath(ctx, "/exec"),

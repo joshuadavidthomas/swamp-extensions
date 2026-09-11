@@ -181,7 +181,7 @@ Deno.test("requestGateway pins proxy target and validated TLS without forwarding
   Object.defineProperty(secure, "authorized", { value: true });
   let tlsOptions: tls.ConnectionOptions | undefined;
   let requestOptions: https.RequestOptions | undefined;
-  const resultPromise = requestGateway(ctx, {
+  const result = await requestGateway(ctx, {
     method: "GET",
     path: "/v1/gateway/list",
     headers: { accept: "application/json" },
@@ -223,7 +223,6 @@ Deno.test("requestGateway pins proxy target and validated TLS without forwarding
       return outgoing;
     }) as unknown as typeof https.request,
   });
-  const result = await resultPromise;
   assertEquals(tlsOptions?.servername, "api.sprites.dev");
   assertEquals(tlsOptions?.rejectUnauthorized, true);
   assertEquals(requestOptions?.hostname, "api.sprites.dev");

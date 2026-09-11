@@ -84,18 +84,16 @@ const ControlExecution = z.object({
   stderrBytes: z.number().int().nonnegative(),
   operations: z.array(OperationMetadata).min(1).max(100),
 });
-const Completion = z.object({
-  type: z.literal("op.complete"),
-  op: z.literal("exec").optional(),
-  args: z.object({ exitCode: z.number().int().optional() }).optional(),
-});
-const OperationError = z.object({
-  type: z.literal("op.error"),
-  op: z.literal("exec").optional(),
-});
 const ServerControl = z.discriminatedUnion("type", [
-  Completion,
-  OperationError,
+  z.object({
+    type: z.literal("op.complete"),
+    op: z.literal("exec").optional(),
+    args: z.object({ exitCode: z.number().int().optional() }).optional(),
+  }),
+  z.object({
+    type: z.literal("op.error"),
+    op: z.literal("exec").optional(),
+  }),
 ]);
 
 type Operation = z.output<typeof ControlExecOperationArgs>;
@@ -107,7 +105,6 @@ export type ControlExecResult = {
   stderr: Uint8Array;
 };
 
-type Action = Operation["actions"][number];
 type RaceResult =
   | { type: "message"; message: Awaited<ReturnType<Channel["read"]>> }
   | { type: "wake" };
@@ -165,11 +162,12 @@ async function runOperation(
     await Promise.race([channel.send(payload), abort]);
     budget.check(TIMEOUT_MESSAGE);
   };
-  async function sendAction(action: Action): Promise<void> {
+  async function sendAction(
+    action: Operation["actions"][number],
+  ): Promise<void> {
     let payload: Uint8Array | string;
     if (action.type === "stdin") {
-      const bytes = inputBytes(action.input);
-      payload = stdinFrame(operation.tty, bytes);
+      payload = stdinFrame(operation.tty, inputBytes(action.input));
     } else if (action.type === "eof") {
       payload = EOF_FRAME;
     } else if (action.type === "resize") {
@@ -202,7 +200,6 @@ async function runOperation(
     exitSources.add(source);
     return code;
   };
-  const actions = operation.actions;
   let actionIndex = 0;
   if (operation.input !== undefined) {
     await sendAction({ type: "stdin", atMs: 0, input: operation.input });
@@ -219,7 +216,7 @@ async function runOperation(
   let pendingRead = channel.read();
   while (true) {
     budget.check(TIMEOUT_MESSAGE);
-    const nextAction = actions[actionIndex];
+    const nextAction = operation.actions[actionIndex];
     const actionRemaining = nextAction === undefined
       ? Number.POSITIVE_INFINITY
       : nextAction.atMs - (performance.now() - started);
@@ -229,13 +226,12 @@ async function runOperation(
       continue;
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadlineRemaining = budget.remainingMs();
     const wake = nextAction === undefined
       ? new Promise<RaceResult>(() => {})
       : new Promise<RaceResult>((resolve) => {
         timer = setTimeout(
           () => resolve({ type: "wake" }),
-          Math.min(actionRemaining, deadlineRemaining, 2_147_483_647),
+          Math.min(actionRemaining, budget.remainingMs(), 2_147_483_647),
         );
       });
     let outcome: RaceResult;
@@ -264,7 +260,7 @@ async function runOperation(
         const frame = decodeStreamFrame(message.bytes);
         if (frame.kind === "exit") {
           nativeExit = recordExit("binary", frame.code);
-          actionIndex = actions.length;
+          actionIndex = operation.actions.length;
         } else {
           if (nativeExit !== undefined) {
             throw new Error(
@@ -285,7 +281,7 @@ async function runOperation(
     }
     if (control.type === "exit") {
       nativeExit = recordExit("json", control.exit_code);
-      actionIndex = actions.length;
+      actionIndex = operation.actions.length;
       pendingRead = channel.read();
       continue;
     }

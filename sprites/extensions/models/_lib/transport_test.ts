@@ -19,8 +19,6 @@ import { SpriteArgsSchema, type SpriteContext } from "./sprite-api.ts";
 import { connectExecProxy, ProxyArgs, runProxy } from "./proxy.ts";
 import { testContext } from "./test_support.ts";
 
-const encoder = new TextEncoder();
-
 async function certificateFixture(): Promise<{
   cert: string;
   key: string;
@@ -181,7 +179,7 @@ Deno.test("openChannel uses real TLS and WebSocket framing, graceful close, and 
     );
     assertEquals(await channel.read(), {
       binary: false,
-      bytes: encoder.encode("control"),
+      bytes: new TextEncoder().encode("control"),
     });
     assertEquals(await channel.read(), {
       binary: true,
@@ -359,13 +357,18 @@ Deno.test("runProxy delivers close-delimited responses before bounded cleanup", 
       try {
         const outerPort = await listen(outer);
         const ctx = context(outerPort);
-        const socketFactory: SocketFactory = (url, options) =>
-          new WebSocket(url, { ...options, ca: fixture.cert });
         const connectWithCa: typeof openChannel = (
           channelContext,
           path,
           query = {},
-        ) => openChannel(channelContext, path, query, socketFactory);
+        ) =>
+          openChannel(
+            channelContext,
+            path,
+            query,
+            (url, options) =>
+              new WebSocket(url, { ...options, ca: fixture.cert }),
+          );
 
         {
           const localPort = await reserveTcpPort();
@@ -595,13 +598,17 @@ Deno.test("requestGateway crosses the real WebSocket proxy and a validated inner
     gatewayPort = await listen(gateway);
     const outerPort = await listen(outer);
     const ctx = context(outerPort);
-    const socketFactory: SocketFactory = (url, options) =>
-      new WebSocket(url, { ...options, ca: fixture.cert });
     const caConnect: typeof openChannel = (
       channelContext,
       path,
       query = {},
-    ) => openChannel(channelContext, path, query, socketFactory);
+    ) =>
+      openChannel(
+        channelContext,
+        path,
+        query,
+        (url, options) => new WebSocket(url, { ...options, ca: fixture.cert }),
+      );
     const result = await requestGateway(ctx, {
       method: "POST",
       path: "/v1/gateway/demo",

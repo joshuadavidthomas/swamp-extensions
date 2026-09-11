@@ -51,7 +51,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 Deno.test("list routes provider filtering and retains open provider_info metadata", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const { result, calls } = await withMockedFetch(
     [jsonResponse({ connections: [connection()] })],
@@ -72,7 +71,7 @@ Deno.test("list routes provider filtering and retains open provider_info metadat
     "Bearer test-organization-token",
   );
   assertEquals(result.dataHandles.length, 1);
-  const writes = getWrittenResources();
+  const writes = context.getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "connections");
   assertEquals(writes[0].data, {
@@ -174,7 +173,6 @@ Deno.test("provision sends only the provider and stores its connection", async (
 
 Deno.test("get encodes the organization-scoped connector id", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ connection: connection({ id: "connection/one" }) })],
@@ -188,14 +186,13 @@ Deno.test("get encodes the organization-scoped connector id", async () => {
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "GET");
   assertStringIncludes(calls[0].url, "/v1/oauth/connections/connection%2Fone");
-  assertEquals(getWrittenResources()[0].data, {
+  assertEquals(context.getWrittenResources()[0].data, {
     connection: connection({ id: "connection/one" }),
   });
 });
 
 Deno.test("updatePolicy sends the complete replacement policy", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -217,12 +214,11 @@ Deno.test("updatePolicy sends the complete replacement policy", async () => {
     "/v1/oauth/connections/connection-1",
   );
   assertEquals(requestBody, { access_policy: policy });
-  assertEquals(getWrittenResources().length, 1);
+  assertEquals(context.getWrittenResources().length, 1);
 });
 
 Deno.test("delete sends one DELETE and stores the id", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const { result, calls } = await withMockedFetch(
     [new Response(null, { status: 204 })],
@@ -235,7 +231,7 @@ Deno.test("delete sends one DELETE and stores the id", async () => {
 
   assertEquals(calls.map((call) => call.method), ["DELETE"]);
   assertEquals(result.dataHandles.length, 1);
-  const writes = getWrittenResources();
+  const writes = context.getWrittenResources();
   assertEquals(writes.length, 1);
   assertEquals(writes[0].specName, "deletion");
   assertEquals(writes[0].data, { id: "connection-1" });
@@ -243,7 +239,6 @@ Deno.test("delete sends one DELETE and stores the id", async () => {
 
 Deno.test("delete accepts a 404 as an already-completed deletion", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const { calls } = await withMockedFetch(
     [jsonResponse({ error: "not found" }, 404)],
@@ -255,14 +250,13 @@ Deno.test("delete accepts a 404 as an already-completed deletion", async () => {
   );
 
   assertEquals(calls.map((call) => call.method), ["DELETE"]);
-  assertEquals(getWrittenResources()[0].data, {
+  assertEquals(context.getWrittenResources()[0].data, {
     id: "connection-1",
   });
 });
 
 Deno.test("authorize sends OAuth query fields and stores sensitive output", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const { calls } = await withMockedFetch(
     [jsonResponse({
@@ -294,12 +288,11 @@ Deno.test("authorize sends OAuth query fields and stores sensitive output", asyn
     "https://client.example.test/oauth/callback",
   );
   assertEquals(url.searchParams.get("state"), "client-state");
-  assertEquals(getWrittenResources()[0].specName, "authorization");
+  assertEquals(context.getWrittenResources()[0].specName, "authorization");
 });
 
 Deno.test("callback sends code and policy without the provider path field", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
   let requestBody: unknown;
 
   const { calls } = await withMockedFetch(
@@ -332,12 +325,11 @@ Deno.test("callback sends code and policy without the provider path field", asyn
     state: "server-state",
     access_policy: policy,
   });
-  assertEquals(getWrittenResources()[0].specName, "connection");
+  assertEquals(context.getWrittenResources()[0].specName, "connection");
 });
 
 Deno.test("invalid API output fails without writing a resource", async () => {
   const context = testContext(globalArgs);
-  const { getWrittenResources } = context;
 
   const error = await assertRejects(
     () =>
@@ -349,5 +341,5 @@ Deno.test("invalid API output fails without writing a resource", async () => {
   );
 
   assertStringIncludes(error.message, "invalid JSON response");
-  assertEquals(getWrittenResources(), []);
+  assertEquals(context.getWrittenResources(), []);
 });

@@ -21,7 +21,6 @@ import {
 import { type SpriteContext, spritePath, verifySprite } from "./sprite-api.ts";
 import { ExecControl } from "./exec.ts";
 import { decodeStreamFrame, EOF_FRAME, stdinFrame } from "./exec-http.ts";
-const PYTHON = "/.sprite/bin/python3";
 const ACK = new TextEncoder().encode("connected\n");
 const PROGRAM = String.raw`import os,socket,sys,threading
 
@@ -216,7 +215,7 @@ export async function connectExecProxy(
     if (remaining <= 0) throw failure("exceeded timeoutMs before connecting.");
     const query: Query = {
       cmd: [
-        PYTHON,
+        "/.sprite/bin/python3",
         "-I",
         "-u",
         "-c",
@@ -324,12 +323,6 @@ const ProxyOutput = z.object({
 });
 const MAX_PROXY_QUEUE_BYTES = 1024 * 1024;
 const MAX_PROXY_AGGREGATE_QUEUE_BYTES = 128 * 1024 * 1024;
-
-/** Dependencies used by the loopback listener, exposed for deterministic tests. */
-export type ProxyDependencies = {
-  connect?: ConnectChannel;
-  createServer?: typeof net.createServer;
-};
 
 async function runConnection(
   socket: net.Socket,
@@ -508,7 +501,10 @@ async function runConnection(
 export async function runProxy(
   ctx: SpriteContext,
   args: z.output<typeof ProxyArgs>,
-  dependencies: ProxyDependencies = {},
+  dependencies: {
+    connect?: ConnectChannel;
+    createServer?: typeof net.createServer;
+  } = {},
 ): Promise<z.output<typeof ProxyOutput>> {
   ctx.signal.throwIfAborted();
   const budget = deadline(ctx);

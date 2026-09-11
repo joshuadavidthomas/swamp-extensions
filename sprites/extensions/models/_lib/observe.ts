@@ -9,27 +9,24 @@ import {
   readChannel,
 } from "./socket.ts";
 import { type SpriteContext, spritePath } from "./sprite-api.ts";
-const EventKind = z.enum(["write", "create", "remove", "rename", "chmod"]);
-const Subscribed = z.object({
-  type: z.literal("subscribed"),
-  paths: z.array(z.string()).optional(),
-});
 const WatchEvent = z.object({
   type: z.literal("event"),
   path: z.string().optional(),
-  event: EventKind.optional(),
+  event: z.enum(["write", "create", "remove", "rename", "chmod"]).optional(),
   timestamp: z.string().optional(),
   size: z.number().optional(),
   isDir: z.boolean().optional(),
 });
-const WatchError = z.object({
-  type: z.literal("error"),
-  message: z.string().optional(),
-});
 const WatchMessage = z.discriminatedUnion("type", [
-  Subscribed,
+  z.object({
+    type: z.literal("subscribed"),
+    paths: z.array(z.string()).optional(),
+  }),
   WatchEvent,
-  WatchError,
+  z.object({
+    type: z.literal("error"),
+    message: z.string().optional(),
+  }),
 ]);
 const WatchOutput = z.object({
   events: z.array(WatchEvent),
@@ -48,10 +45,9 @@ export const WatchArgs = z.object({
 
 const MAX_PORTS = 100_000;
 
-const PortNumber = z.number().int().min(1).max(65_535);
 const PortNotification = z.object({
   type: z.enum(["port_opened", "port_closed"]),
-  port: PortNumber,
+  port: z.number().int().min(1).max(65_535),
   address: z.string(),
   pid: z.number().int(),
 });
@@ -159,12 +155,11 @@ async function observe<F, E, T>(
           `${options.operation} returned an unexpected binary frame.`,
         );
       }
-      const event = decodeFrame(
+      events.push(options.event(decodeFrame(
         next.bytes,
         options.eventSchema,
         `${options.operation} returned an invalid event.`,
-      );
-      events.push(options.event(event));
+      )));
     }
     return { first, events };
   } catch (error) {

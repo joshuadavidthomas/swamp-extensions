@@ -163,15 +163,13 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
       z.object({ service_name: ManagementResourceName }),
       "service",
       Service,
-      async (args, ctx: SpriteContext) => {
-        const service = await read(
+      (args, ctx: SpriteContext) =>
+        read(
           ctx,
           `/v1/services/${segment(args.service_name)}`,
           Service,
           execute,
-        );
-        return service;
-      },
+        ),
     ),
     signalService: method(
       "Signal a service through the Sprite management socket",
@@ -194,16 +192,15 @@ export function createManagementMethods(execute: ManagementExec = executeHttp) {
       z.object({}),
       "tasks",
       Tasks,
-      async (_args, ctx: SpriteContext) =>
-        await read(ctx, "/v1/tasks", Tasks, execute),
+      (_args, ctx: SpriteContext) => read(ctx, "/v1/tasks", Tasks, execute),
     ),
     getTask: method(
       "Read an active task hold",
       z.object({ name: ManagementResourceName }),
       "task",
       Task,
-      async (args, ctx: SpriteContext) =>
-        await read(ctx, `/v1/tasks/${segment(args.name)}`, Task, execute),
+      (args, ctx: SpriteContext) =>
+        read(ctx, `/v1/tasks/${segment(args.name)}`, Task, execute),
     ),
     createTask: method(
       "Create a task hold; an existing name fails rather than being refreshed",

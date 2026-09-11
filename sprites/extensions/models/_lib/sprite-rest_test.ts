@@ -44,19 +44,6 @@ const service = {
     next_restart_at: "2026-01-03T00:00:00Z",
   },
 };
-const fsList = {
-  path: "/app",
-  entries: [{
-    name: "index.ts",
-    path: "/app/index.ts",
-    type: "file",
-    size: 12,
-    mode: "0644",
-    modTime: "2026-01-02T00:00:00Z",
-    isDir: false,
-  }],
-  count: 1,
-};
 const checkpointStream =
   '{"type":"info","data":"working","time":"2026-01-02T00:00:00Z"}\n' +
   '{"type":"complete","data":"done","time":"2026-01-02T00:00:01Z"}\n';
@@ -78,7 +65,7 @@ function json(value: unknown, status = 200): Response {
   });
 }
 function ndjson(value: string): Response {
-  return new Response(value, {});
+  return new Response(value);
 }
 function noContent(): Response {
   return new Response(null, { status: 204 });
@@ -306,7 +293,19 @@ const routeCases: Array<{
     args: { path: "/app", workingDir: "/" },
     httpMethod: "GET",
     path: "/v1/sprites/demo%20sprite/fs/list?path=%2Fapp&workingDir=%2F",
-    response: json(fsList),
+    response: json({
+      path: "/app",
+      entries: [{
+        name: "index.ts",
+        path: "/app/index.ts",
+        type: "file",
+        size: 12,
+        mode: "0644",
+        modTime: "2026-01-02T00:00:00Z",
+        isDir: false,
+      }],
+      count: 1,
+    }),
     output: "files",
   },
   {
@@ -540,13 +539,12 @@ Deno.test("restart refuses missing and replaced identities before POST", async (
 });
 
 Deno.test("probeUrl verifies identity then fingerprints only the provider root body", async () => {
-  const probeGlobals = { ...globalArgs, name: "worker" };
   const state = {
     ...sprite,
     name: "worker",
     url: "https://worker-a1.sprites.app/",
   };
-  const test = testContext(probeGlobals, {
+  const test = testContext({ ...globalArgs, name: "worker" }, {
     storedResources: { state },
   });
   const { calls } = await withMockedFetch(
@@ -571,7 +569,6 @@ Deno.test("probeUrl verifies identity then fingerprints only the provider root b
 });
 
 Deno.test("probeUrl refuses missing and replaced identities before the URL request", async () => {
-  const probeGlobals = { ...globalArgs, name: "worker" };
   const state = {
     ...sprite,
     name: "worker",
@@ -582,7 +579,7 @@ Deno.test("probeUrl refuses missing and replaced identities before the URL reque
     { ...state, id: "old-id" },
   ];
   for (const stored of identities) {
-    const test = testContext(probeGlobals, {
+    const test = testContext({ ...globalArgs, name: "worker" }, {
       storedResources: stored ? { state: stored } : {},
     });
     const { calls } = await withMockedFetch(
@@ -599,7 +596,6 @@ Deno.test("probeUrl refuses missing and replaced identities before the URL reque
 });
 
 Deno.test("probeUrl rejects non-provider root URLs before an application request", async () => {
-  const probeGlobals = { ...globalArgs, name: "worker" };
   const invalidUrls = [
     "http://worker-a.sprites.app/",
     "https://other-a.sprites.app/",
@@ -612,7 +608,7 @@ Deno.test("probeUrl rejects non-provider root URLs before an application request
   ];
   for (const url of invalidUrls) {
     const state = { ...sprite, name: "worker", url };
-    const test = testContext(probeGlobals, {
+    const test = testContext({ ...globalArgs, name: "worker" }, {
       storedResources: { state },
     });
     const { calls } = await withMockedFetch(
@@ -629,11 +625,6 @@ Deno.test("probeUrl rejects non-provider root URLs before an application request
 });
 
 Deno.test("probeUrl enforces response size and saves no failed status", async () => {
-  const probeGlobals = {
-    ...globalArgs,
-    name: "worker",
-    maxResponseBytes: 4,
-  };
   const state = {
     ...sprite,
     name: "worker",
@@ -645,7 +636,11 @@ Deno.test("probeUrl enforces response size and saves no failed status", async ()
       new Response("no", { status: 503 }),
     ]
   ) {
-    const test = testContext(probeGlobals, {
+    const test = testContext({
+      ...globalArgs,
+      name: "worker",
+      maxResponseBytes: 4,
+    }, {
       storedResources: { state },
     });
     await assertRejects(
@@ -660,7 +655,6 @@ Deno.test("probeUrl enforces response size and saves no failed status", async ()
 });
 
 Deno.test("probeUrl cancels a non-200 body", async () => {
-  const probeGlobals = { ...globalArgs, name: "worker" };
   const state = {
     ...sprite,
     name: "worker",
@@ -672,7 +666,7 @@ Deno.test("probeUrl cancels a non-200 body", async () => {
       cancelled = true;
     },
   });
-  const test = testContext(probeGlobals, {
+  const test = testContext({ ...globalArgs, name: "worker" }, {
     storedResources: { state },
   });
   await assertRejects(
@@ -743,9 +737,8 @@ Deno.test("create binds the global name and sends every supported option in prov
 
 Deno.test("filesystem requests preserve binary bytes and DELETE uses a JSON body", async () => {
   const readContext = testContext(globalArgs);
-  const bytes = new Uint8Array([0, 255, 1, 128]);
   const readResult = await withMockedFetch(
-    [new Response(bytes)],
+    [new Response(new Uint8Array([0, 255, 1, 128]))],
     () =>
       runnable("readFile").execute(
         { path: "raw.bin", workingDir: "/data" },

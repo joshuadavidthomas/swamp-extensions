@@ -50,13 +50,9 @@ const result = (
   exitCode,
 });
 function setup(stored = true) {
-  const test = testContext(globalArgs, {
+  return testContext(globalArgs, {
     storedResources: stored ? { state: sprite } : {},
   });
-  return {
-    ...test,
-    ctx: test,
-  };
 }
 const identity = () => new Response(JSON.stringify(sprite));
 
@@ -167,7 +163,7 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
     const methods = createManagementMethods(execute);
     const { calls } = await withMockedFetch(
       [identity()],
-      () => methods[c.method].execute(c.input as never, test.ctx),
+      () => methods[c.method].execute(c.input as never, test),
     );
     assertEquals(calls.length, 1);
     assertEquals(called, 1);
@@ -180,12 +176,13 @@ Deno.test("management methods use fixed local routes, stdin JSON and typed outpu
 });
 
 Deno.test("getService rejects invalid shapes, HTTP errors, and malformed JSON", async () => {
-  const failures = [
-    result(JSON.stringify({ ...service, needs: undefined }), 200),
-    result("not found", 404),
-    result("{broken", 200),
-  ];
-  for (const response of failures) {
+  for (
+    const response of [
+      result(JSON.stringify({ ...service, needs: undefined }), 200),
+      result("not found", 404),
+      result("{broken", 200),
+    ]
+  ) {
     const test = setup();
     let count = 0;
     const methods = createManagementMethods((_ctx, query) => {
@@ -200,7 +197,7 @@ Deno.test("getService rejects invalid shapes, HTTP errors, and malformed JSON", 
           () =>
             methods.getService.execute(
               { service_name: service.name },
-              test.ctx,
+              test,
             ),
         ),
       Error,
@@ -221,8 +218,7 @@ Deno.test("getService requires the saved Sprite identity before local exec", asy
     () =>
       withMockedFetch(
         [],
-        () =>
-          methods.getService.execute({ service_name: service.name }, test.ctx),
+        () => methods.getService.execute({ service_name: service.name }, test),
       ),
     Error,
   );
@@ -259,8 +255,7 @@ Deno.test("management failures are sanitized and never replay a mutation", async
       () =>
         withMockedFetch(
           [identity()],
-          () =>
-            methods.createTask.execute({ name: "agent", expire: 60 }, test.ctx),
+          () => methods.createTask.execute({ name: "agent", expire: 60 }, test),
         ),
       Error,
     );
@@ -287,7 +282,7 @@ Deno.test("management reads reject invalid JSON and invalid shapes", async () =>
       () =>
         withMockedFetch(
           [identity()],
-          () => methods.listTasks.execute({}, test.ctx),
+          () => methods.listTasks.execute({}, test),
         ),
       Error,
     );
@@ -314,7 +309,7 @@ Deno.test("management refuses missing or replaced Sprite identity before exec", 
             methods.signalService.execute({
               service_name: "web",
               signal: "USR1",
-            }, test.ctx),
+            }, test),
         ),
       Error,
     );
@@ -348,8 +343,8 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
   for (const cancel of [false, true]) {
     const test = setup();
     const controller = new AbortController();
-    test.ctx.signal = controller.signal;
-    test.ctx.globalArgs = { ...globalArgs, timeoutMs: 30 };
+    test.signal = controller.signal;
+    test.globalArgs = { ...globalArgs, timeoutMs: 30 };
     const methods = createManagementMethods(() => {
       if (cancel) controller.abort();
       else {
@@ -364,8 +359,7 @@ Deno.test("management cancellation and elapsed deadlines cannot produce success"
       () =>
         withMockedFetch(
           [identity()],
-          () =>
-            methods.createTask.execute({ name: "agent", expire: 1 }, test.ctx),
+          () => methods.createTask.execute({ name: "agent", expire: 1 }, test),
         ),
       Error,
     );
