@@ -1,71 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly swamp_version="20260922.200837.0-sha.cd12d9b5"
-readonly just_version="1.58.0"
+readonly swamp_version="$(sed -n 's/^swampVersion: *//p' .swamp.yaml)"
 readonly install_dir="${HOME}/.local/bin"
 readonly swamp_bin="${install_dir}/swamp"
 readonly deno_bin="${install_dir}/deno"
 readonly just_bin="${install_dir}/just"
 
-step() {
-  printf '\n==> %s\n' "$1"
-}
+started_at=$SECONDS
+echo "[orb setup] Ensuring swamp ${swamp_version} or newer is installed"
 
-step "Checking system dependencies"
-missing_packages=()
-command -v curl >/dev/null 2>&1 || missing_packages+=(curl)
-command -v openssl >/dev/null 2>&1 || missing_packages+=(openssl)
-
-if ((${#missing_packages[@]})); then
-  sudo apt-get update -qq
-  sudo apt-get install -y "${missing_packages[@]}"
-fi
-
-mkdir -p "$install_dir"
-
-step "Ensuring Swamp ${swamp_version} is installed"
-installed_swamp_version=""
+installed_version=""
 if [[ -x "$swamp_bin" ]]; then
-  installed_swamp_version="$($swamp_bin --version 2>/dev/null || true)"
-fi
-if [[ "$installed_swamp_version" != *"$swamp_version"* ]]; then
-  CI=1 curl -fsSL https://swamp.club/install.sh |
-    CI=1 sh -s -- -V "$swamp_version" -d "$install_dir"
+  installed_version="$($swamp_bin --version 2>/dev/null | sed -n 's/^swamp \([0-9.]*\).*/\1/p' || true)"
 fi
 
-step "Exposing Swamp's bundled Deno"
+if [[ -z "$installed_version" ]] ||
+  [[ "$(printf '%s\n%s\n' "$swamp_version" "$installed_version" | sort -V | head -n 1)" != "$swamp_version" ]]; then
+  mkdir -p "$install_dir"
+  CI=1 curl -fsSL https://swamp.club/install.sh |
+    CI=1 sh -s -- -d "$install_dir"
+else
+  echo "[orb setup] swamp ${installed_version} satisfies ${swamp_version}"
+fi
+
+echo "[orb setup] Exposing swamp's bundled deno"
 doctor_output="$($swamp_bin doctor extensions --json)"
-deno_path="$(sed -n 's/.*"denoPath": "\([^"]*\)".*/\1/p' <<<"$doctor_output")"
-if [[ -z "$deno_path" || ! -x "$deno_path" ]]; then
-  printf 'Unable to locate Swamp bundled Deno\n' >&2
+bundled_deno="$(sed -n 's/.*"denoPath": "\([^"]*\)".*/\1/p' <<<"$doctor_output")"
+if [[ -z "$bundled_deno" || ! -x "$bundled_deno" ]]; then
+  echo "[orb setup] Could not locate swamp's bundled deno" >&2
   exit 1
 fi
-ln -sfn "$deno_path" "$deno_bin"
+ln -sfn "$bundled_deno" "$deno_bin"
 
-step "Ensuring just ${just_version} is installed"
-installed_just_version=""
-if [[ -x "$just_bin" ]]; then
-  installed_just_version="$($just_bin --version 2>/dev/null || true)"
-fi
-if [[ "$installed_just_version" != "just ${just_version}" ]]; then
-  uv tool install --force "rust-just==${just_version}"
+echo "[orb setup] Ensuring just is installed"
+if [[ ! -x "$just_bin" ]]; then
+  uv tool install rust-just
 fi
 
-step "Warming development dependencies"
-uvx prek --version
-(
-  cd sprites
-  cache_lock="$(mktemp)"
-  trap 'rm -f "$cache_lock"' EXIT
-  cp deno.lock "$cache_lock"
-  "$deno_bin" cache --lock="$cache_lock" \
-    extensions/models/*.ts \
-    extensions/models/_lib/*.ts \
-    scripts/*.ts
-)
-
-step "Orb setup complete"
 "$swamp_bin" --version
 "$deno_bin" --version
 "$just_bin" --version
+echo "[orb setup] Complete in $((SECONDS - started_at))s"
